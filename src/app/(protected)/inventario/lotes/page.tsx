@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import type { Lote, Product } from '@/lib/types'
@@ -293,7 +293,8 @@ export default function LotesPage() {
                   : 0
                 const agotado = lote.cantidad_disponible <= 0
                 return (
-                  <tr key={lote.id} className={agotado ? 'opacity-40' : ''}>
+                  <React.Fragment key={lote.id}>
+                  <tr className={agotado ? 'opacity-40' : ''}>
                     <td className="px-4 py-3 font-medium text-gray-800">
                       {lote.product?.nombre ?? '—'}
                     </td>
@@ -390,6 +391,7 @@ export default function LotesPage() {
                       </td>
                     </tr>
                   )}
+                  </React.Fragment>
                 )
               })}
             </tbody>
