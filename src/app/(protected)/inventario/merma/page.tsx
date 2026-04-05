@@ -59,7 +59,7 @@ export default function MermaPage() {
         .limit(100),
       supabase
         .from('products')
-        .select('id, nombre, unidad, activo')
+        .select('id, nombre, unidad, activo, precio_por_unidad, categoria, precio_compra, stock_minimo, sucursal_id, created_at')
         .eq('activo', true)
         .in('unidad', ['kg', 'g'])
         .order('nombre'),
