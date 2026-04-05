@@ -350,7 +350,6 @@ export default function LotesPage() {
                       </td>
                     )}
                   </tr>
-                  {/* Inline adjustment form — appears below the lote row */}
                   {canWrite && adjustingId === lote.id && (
                     <tr>
                       <td colSpan={7} className="px-4 pb-3 pt-1 bg-blue-50 border-b border-blue-100">
