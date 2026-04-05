@@ -79,7 +79,7 @@ export default function MermaPage() {
     }
     supabase
       .from('lotes')
-      .select('id, fecha_entrada, cantidad_inicial, cantidad_disponible, proveedor')
+      .select('id, fecha_entrada, cantidad_inicial, cantidad_disponible, proveedor, product_id, sucursal_id, costo_por_unidad, notas, creado_por, created_at')
       .eq('product_id', form.product_id)
       .eq('sucursal_id', profile.sucursal_id)
       .gt('cantidad_disponible', 0)
