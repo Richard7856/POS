@@ -52,7 +52,7 @@ export default function LotesPage() {
         .order('created_at', { ascending: false }),
       supabase
         .from('products')
-        .select('id, nombre, unidad, categoria, activo')
+        .select('id, nombre, unidad, categoria, activo, precio_por_unidad, precio_compra, stock_minimo, sucursal_id, created_at')
         .eq('activo', true)
         .in('unidad', ['kg', 'g'])       // only weight-based products use lotes
         .order('nombre'),
