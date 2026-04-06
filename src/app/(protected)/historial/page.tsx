@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { VentaWithItems } from '@/lib/types'
 import DevolucionModal from '@/components/DevolucionModal'
+import { HistorialSkeleton } from '@/components/Skeleton'
 
 const METODO_ICON: Record<string, string> = {
   efectivo:      '💵',
@@ -79,7 +80,7 @@ export default function HistorialPage() {
   const isHoy  = selectedDate === isoDate(0)
   const isAyer = selectedDate === isoDate(-1)
 
-  if (loading) return <div className="p-8 text-gray-400">Cargando...</div>
+  if (loading) return <HistorialSkeleton />
 
   return (
     <div className="p-4 md:p-6 max-w-3xl mx-auto overflow-y-auto h-full">

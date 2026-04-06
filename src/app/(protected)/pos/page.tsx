@@ -9,6 +9,7 @@ import { usePromociones, ComboNotification } from '@/hooks/usePromociones'
 import WeightModal from '@/components/WeightModal'
 import CheckoutModal from '@/components/CheckoutModal'
 import MovimientoCajaModal from '@/components/MovimientoCajaModal'
+import { POSSkeleton } from '@/components/Skeleton'
 
 export default function POSPage() {
   const { profile } = useAuth()
@@ -224,13 +225,7 @@ export default function POSPage() {
     )
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400">
-        Cargando productos...
-      </div>
-    )
-  }
+  if (loading) return <POSSkeleton />
 
   return (
     <div className="flex flex-col md:flex-row h-full overflow-hidden">

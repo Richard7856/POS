@@ -21,6 +21,7 @@ import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import type { Corte, MovimientoCaja } from '@/lib/types'
 import MovimientoCajaModal from '@/components/MovimientoCajaModal'
+import { CorteSkeleton } from '@/components/Skeleton'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -278,7 +279,7 @@ export default function CorteCajaPage() {
     }
   }
 
-  if (loading) return <div className="p-8 text-gray-400">Calculando...</div>
+  if (loading) return <CorteSkeleton />
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
+import { DashboardSkeleton } from '@/components/Skeleton'
 
 // ─── Local Types ──────────────────────────────────────────────────────────────
 
@@ -105,35 +106,85 @@ export default function DashboardPage() {
     const lunes  = toISO(startOfWeek(now))
     const mes    = toISO(startOfMonth(now))
 
-    // ── Fetch all ventas (max 2000 this month for perf) ──────────────────────
-    // Admin sees all sucursales; encargado is filtered to their own sucursal
-    let ventasQuery = supabase
+    // ── Round 1: 5 independent queries fired in parallel ─────────────────────
+    // Previously these ran sequentially (each blocked by the previous).
+    // sucursalesQuery only makes sense for admin — non-admins get a null promise.
+    let ventasQ = supabase
       .from('ventas')
       .select('id, total, metodo_pago, sucursal_id, created_at')
       .gte('created_at', mes)
       .order('created_at', { ascending: false })
       .limit(2000)
+    if (!isAdmin && profile.sucursal_id) ventasQ = ventasQ.eq('sucursal_id', profile.sucursal_id)
 
+    let mermaQ = supabase.from('mermas').select('cantidad').gte('created_at', mes)
+    let lotesQ = supabase.from('lotes').select('cantidad_inicial').gte('created_at', mes)
     if (!isAdmin && profile.sucursal_id) {
-      ventasQuery = ventasQuery.eq('sucursal_id', profile.sucursal_id)
+      mermaQ = mermaQ.eq('sucursal_id', profile.sucursal_id)
+      lotesQ = lotesQ.eq('sucursal_id', profile.sucursal_id)
     }
 
-    const { data: ventasMes } = await ventasQuery
+    let prodsMinQ = supabase
+      .from('products')
+      .select('id, stock_minimo')
+      .eq('activo', true)
+      .in('unidad', ['kg', 'g'])
+      .not('stock_minimo', 'is', null)
+    if (!isAdmin && profile.sucursal_id) prodsMinQ = prodsMinQ.eq('sucursal_id', profile.sucursal_id)
+
+    const sucQ = isAdmin
+      ? supabase.from('sucursales').select('id, nombre').eq('activa', true).order('nombre')
+      : null
+
+    const [
+      { data: ventasMes },
+      { data: mermasData },
+      { data: lotesData },
+      { data: productsConMinimo },
+      sucResult,
+    ] = await Promise.all([
+      ventasQ,
+      mermaQ,
+      lotesQ,
+      prodsMinQ,
+      sucQ ?? Promise.resolve({ data: null }),
+    ])
 
     const ventasData = ventasMes ?? []
 
-    // Segment by period
+    // ── Round 2: 2 queries that depend on Round 1 results, fired in parallel ──
+    const ventaIds = ventasData.map((v) => v.id)
+    const pids     = (productsConMinimo ?? []).map((p) => p.id)
+
+    let lotesMinQ = supabase
+      .from('lotes')
+      .select('product_id, cantidad_disponible')
+      .gt('cantidad_disponible', 0)
+    if (pids.length > 0) lotesMinQ = lotesMinQ.in('product_id', pids)
+    if (!isAdmin && profile.sucursal_id) lotesMinQ = lotesMinQ.eq('sucursal_id', profile.sucursal_id)
+
+    const [itemsResult, { data: lotesMin }] = await Promise.all([
+      ventaIds.length > 0
+        ? supabase
+            .from('venta_items')
+            .select('nombre_producto, cantidad, unidad, subtotal')
+            .in('venta_id', ventaIds)
+            .in('unidad', ['kg', 'g'])
+        : Promise.resolve({ data: [] as { nombre_producto: string; cantidad: number; unidad: string; subtotal: number }[] }),
+      pids.length > 0 ? lotesMinQ : Promise.resolve({ data: [] as { product_id: string; cantidad_disponible: number }[] }),
+    ])
+
+    // ── Derive KPIs from in-memory ventas (no extra queries) ──────────────────
     const ventasHoy    = ventasData.filter((v) => v.created_at >= today)
     const ventasSemana = ventasData.filter((v) => v.created_at >= lunes)
 
-    // ── KPI builders ──────────────────────────────────────────────────────────
     function buildKpis(ventas: typeof ventasData): KpiBlock[] {
       const total   = ventas.reduce((s, v) => s + v.total, 0)
       const count   = ventas.length
       const ticket  = count > 0 ? total / count : 0
       return [
-        { label: 'Total vendido', value: fmt(total), color: 'text-green-700' },
-        { label: 'Ventas',        value: count.toString() },
+        { label: 'Total vendido',   value: fmt(total), color: 'text-green-700' },
+        { label: 'Ventas',          value: count.toString() },
         { label: 'Ticket promedio', value: fmt(ticket) },
       ]
     }
@@ -142,7 +193,7 @@ export default function DashboardPage() {
     setKpisSemana(buildKpis(ventasSemana))
     setKpisMes(buildKpis(ventasData))
 
-    // ── Métodos de pago (hoy) ─────────────────────────────────────────────────
+    // Métodos de pago (hoy) — computed from already-fetched ventas
     const pagoMap = new Map<string, { total: number; count: number }>()
     for (const v of ventasHoy) {
       const prev = pagoMap.get(v.metodo_pago) ?? { total: 0, count: 0 }
@@ -154,114 +205,61 @@ export default function DashboardPage() {
         .sort((a, b) => b.total - a.total)
     )
 
-    // ── Top productos (this month, kg/g only) ─────────────────────────────────
-    // Fetch venta_items for this month's ventas
-    const ventaIds = ventasData.map((v) => v.id)
-    if (ventaIds.length > 0) {
-      const { data: items } = await supabase
-        .from('venta_items')
-        .select('nombre_producto, cantidad, unidad, subtotal')
-        .in('venta_id', ventaIds)
-        .in('unidad', ['kg', 'g'])
-
-      if (items) {
-        const productMap = new Map<string, TopProducto>()
-        for (const item of items) {
-          const kgQty = item.unidad === 'g' ? item.cantidad / 1000 : item.cantidad
-          const prev = productMap.get(item.nombre_producto) ?? {
-            nombre: item.nombre_producto,
-            total_kg: 0,
-            total_pesos: 0,
-            veces: 0,
-          }
-          productMap.set(item.nombre_producto, {
-            ...prev,
-            total_kg:    parseFloat((prev.total_kg + kgQty).toFixed(3)),
-            total_pesos: prev.total_pesos + item.subtotal,
-            veces:       prev.veces + 1,
-          })
+    // Top productos — computed from venta_items fetched in Round 2
+    const items = itemsResult.data ?? []
+    if (items.length > 0) {
+      const productMap = new Map<string, TopProducto>()
+      for (const item of items) {
+        const kgQty = item.unidad === 'g' ? item.cantidad / 1000 : item.cantidad
+        const prev = productMap.get(item.nombre_producto) ?? {
+          nombre: item.nombre_producto, total_kg: 0, total_pesos: 0, veces: 0,
         }
-        setTopProductos(
-          [...productMap.values()]
-            .sort((a, b) => b.total_pesos - a.total_pesos)
-            .slice(0, 8)
-        )
+        productMap.set(item.nombre_producto, {
+          ...prev,
+          total_kg:    parseFloat((prev.total_kg + kgQty).toFixed(3)),
+          total_pesos: prev.total_pesos + item.subtotal,
+          veces:       prev.veces + 1,
+        })
       }
+      setTopProductos([...productMap.values()].sort((a, b) => b.total_pesos - a.total_pesos).slice(0, 8))
     } else {
       setTopProductos([])
     }
 
-    // ── Merma % este mes ──────────────────────────────────────────────────────
-    // % = total kg merma / total kg entrada (lotes) for the same period
-    let mermaQuery = supabase.from('mermas').select('cantidad').gte('created_at', mes)
-    let lotesQuery = supabase.from('lotes').select('cantidad_inicial').gte('created_at', mes)
-
-    if (!isAdmin && profile.sucursal_id) {
-      mermaQuery = mermaQuery.eq('sucursal_id', profile.sucursal_id)
-      lotesQuery = lotesQuery.eq('sucursal_id', profile.sucursal_id)
-    }
-
-    const [{ data: mermasData }, { data: lotesData }] = await Promise.all([mermaQuery, lotesQuery])
-
+    // Merma % — from Round 1 results
     const kgMerma   = (mermasData ?? []).reduce((s, m) => s + m.cantidad, 0)
     const kgEntrada = (lotesData  ?? []).reduce((s, l) => s + l.cantidad_inicial, 0)
     setMermaPct(kgEntrada > 0 ? (kgMerma / kgEntrada) * 100 : null)
 
-    // ── Comparativa sucursales (admin only) ───────────────────────────────────
-    if (isAdmin) {
-      const { data: sucData } = await supabase
-        .from('sucursales')
-        .select('id, nombre')
-        .eq('activa', true)
-        .order('nombre')
-
-      if (sucData) {
-        // Group ventas por sucursal
-        const sucMap = new Map<string, { total: number; count: number }>()
-        for (const v of ventasData) {
-          if (!v.sucursal_id) continue
-          const prev = sucMap.get(v.sucursal_id) ?? { total: 0, count: 0 }
-          sucMap.set(v.sucursal_id, { total: prev.total + v.total, count: prev.count + 1 })
-        }
-        setSucursales(
-          sucData.map((s) => ({
-            sucursal_id: s.id,
-            nombre:      s.nombre,
-            total_ventas: sucMap.get(s.id)?.total ?? 0,
-            num_ventas:   sucMap.get(s.id)?.count ?? 0,
-          })).sort((a, b) => b.total_ventas - a.total_ventas)
-        )
+    // Comparativa sucursales (admin only) — from Round 1 results
+    if (isAdmin && sucResult.data) {
+      const sucMap = new Map<string, { total: number; count: number }>()
+      for (const v of ventasData) {
+        if (!v.sucursal_id) continue
+        const prev = sucMap.get(v.sucursal_id) ?? { total: 0, count: 0 }
+        sucMap.set(v.sucursal_id, { total: prev.total + v.total, count: prev.count + 1 })
       }
+      setSucursales(
+        sucResult.data.map((s) => ({
+          sucursal_id:  s.id,
+          nombre:       s.nombre,
+          total_ventas: sucMap.get(s.id)?.total ?? 0,
+          num_ventas:   sucMap.get(s.id)?.count ?? 0,
+        })).sort((a, b) => b.total_ventas - a.total_ventas)
+      )
     }
 
-    // ── Productos bajo mínimo ─────────────────────────────────────────────────
-    // Quick count for the alert banner — re-uses the same lotes already in memory
-    const { data: productsConMinimo } = await supabase
-      .from('products')
-      .select('id, stock_minimo')
-      .eq('activo', true)
-      .in('unidad', ['kg', 'g'])
-      .not('stock_minimo', 'is', null)
-
+    // Productos bajo mínimo — from Round 2 lotes results
     if (productsConMinimo && productsConMinimo.length > 0) {
-      const pids = productsConMinimo.map((p) => p.id)
-      let lotesMinQuery = supabase
-        .from('lotes')
-        .select('product_id, cantidad_disponible')
-        .in('product_id', pids)
-        .gt('cantidad_disponible', 0)
-      if (!isAdmin && profile.sucursal_id) {
-        lotesMinQuery = lotesMinQuery.eq('sucursal_id', profile.sucursal_id)
-      }
-      const { data: lotesMin } = await lotesMinQuery
       const stockActualMap = new Map<string, number>()
       for (const l of lotesMin ?? []) {
         stockActualMap.set(l.product_id, (stockActualMap.get(l.product_id) ?? 0) + l.cantidad_disponible)
       }
-      const bajoMinimo = productsConMinimo.filter(
-        (p) => (stockActualMap.get(p.id) ?? 0) < (p.stock_minimo as number)
-      ).length
-      setProductosAgotados(bajoMinimo)
+      setProductosAgotados(
+        productsConMinimo.filter(
+          (p) => (stockActualMap.get(p.id) ?? 0) < (p.stock_minimo as number)
+        ).length
+      )
     }
 
     setLoading(false)
@@ -269,8 +267,8 @@ export default function DashboardPage() {
 
   useEffect(() => { if (profile && isStaff) load() }, [profile, isStaff, load])
 
-  if (authLoading || !profile) return null
-  if (loading) return <div className="p-8 text-gray-400">Cargando dashboard...</div>
+  if (authLoading || !profile) return <DashboardSkeleton />
+  if (loading) return <DashboardSkeleton />
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
