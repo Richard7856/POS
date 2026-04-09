@@ -191,11 +191,11 @@ export function useBluetoothScale(): ScaleHookReturn {
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [
+          // Only service UUIDs go here — characteristic UUIDs must NOT be listed
+          // (Chrome throws "no es compatible" if it sees a non-service UUID here).
+          // NUS characteristics are accessed via getPrimaryServices → getCharacteristics,
+          // so only the parent NUS service UUID (6e400001-...) is needed.
           ...Object.values(GATT_SCALES).map((s) => s.serviceUuid),
-          // NUS notify characteristic also needs to be declared so Chrome lets us
-          // call getCharacteristic() on it from within the primary service.
-          '6e400003-b5a3-f393-e0a9-e50e24dcca9f',
-          '6e400002-b5a3-f393-e0a9-e50e24dcca9f',
         ],
         // Declare the company IDs we want to receive advertisement data from.
         optionalManufacturerData: ADV_SCALES.map((s) => s.companyId),
