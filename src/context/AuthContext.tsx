@@ -21,6 +21,31 @@ const AuthContext = createContext<AuthContextValue>({
   signOut: async () => {},
 })
 
+// Cache key: stores { userId, profile } so the profile is available instantly
+// on every page load after the first visit, eliminating the RouteGuard spinner.
+const PROFILE_CACHE_KEY = 'pos_profile_v1'
+
+function getCachedProfile(userId: string): Profile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY)
+    if (!raw) return null
+    const { id, data } = JSON.parse(raw) as { id: string; data: Profile }
+    return id === userId ? data : null
+  } catch {
+    return null
+  }
+}
+
+function setCachedProfile(userId: string, profile: Profile) {
+  try {
+    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ id: userId, data: profile }))
+  } catch { /* quota exceeded or private browsing — silently ignore */ }
+}
+
+function clearCachedProfile() {
+  try { localStorage.removeItem(PROFILE_CACHE_KEY) } catch { /* ignore */ }
+}
+
 // Fetches the profile row for a given user ID, including the sucursal name.
 // Returns null if not found (e.g. trigger hasn't run yet on first sign-in).
 async function fetchProfile(userId: string): Promise<Profile | null> {
@@ -38,8 +63,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const loadProfile = useCallback(async (u: User) => {
-    const p = await fetchProfile(u.id)
-    setProfile(p)
+    // Restore from cache immediately so the spinner clears without a network round-trip.
+    // Then fetch fresh data in the background and update if anything changed.
+    const cached = getCachedProfile(u.id)
+    if (cached) {
+      setProfile(cached)
+      setLoading(false)
+      // Background refresh — update cache and state if data changed
+      fetchProfile(u.id).then((fresh) => {
+        if (fresh) {
+          setCachedProfile(u.id, fresh)
+          setProfile(fresh)
+        }
+      })
+    } else {
+      // First visit: must wait for the network response
+      const p = await fetchProfile(u.id)
+      if (p) {
+        setCachedProfile(u.id, p)
+        setProfile(p)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -75,6 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signOut = useCallback(async () => {
+    clearCachedProfile() // remove cache on logout so next user starts clean
     await supabase.auth.signOut()
   }, [])
 
