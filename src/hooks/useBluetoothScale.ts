@@ -109,12 +109,12 @@ const ADV_SCALES: Array<{
   parse(b: Uint8Array): number | null
 }> = [
   {
-    // Assistrust "da" scale — company 0xE01D (nRF shows "<1DE0>": bytes 0x1D 0xE0 = 0xE01D LE)
-    // Protocol calibrated with sample: weight=75.15kg → bytes 65 02 58 01 FE 00 38 85 FA
-    // b[0]=0x65 likely header, b[1]=0x02 likely unit/mode flag
-    // Weight = b[0:1] big-endian (0x6502=25858) / 344.1 ≈ 75.15 — but divisor unclear.
-    // TODO: confirm with console log vs display when bytes change across readings.
-    companyId: 0xe01d,
+    // Etekcity "da" scale — company 0x06D0 (Etekcity Corporation, nRF shows "<0x06D0>")
+    // nRF manufacturer data sample: 5E 02 58 01 FE 00 38 85 FA (bytes 3-8 = MAC reversed)
+    // b[0] likely header/status, b[1:2] = weight candidate, b[3:8] = MAC address
+    // Protocol not yet confirmed — console logs candidates for calibration.
+    // TODO: confirm correct byte pair + divisor by comparing console vs scale display.
+    companyId: 0x06d0,
     name: 'da',
     parse(b: Uint8Array): number | null {
       if (b.length < 4) return null
