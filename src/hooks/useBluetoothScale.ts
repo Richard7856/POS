@@ -276,12 +276,17 @@ export function useBluetoothScale(): ScaleHookReturn {
 
       setStatus('connected')
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      // Include the DOMException name (e.g. "NotSupportedError", "SecurityError") so
+      // we can tell exactly which API call failed when diagnosing Bluetooth issues.
+      const name = err instanceof DOMException ? `[${err.name}] ` : ''
+      const msg  = err instanceof Error ? err.message : 'Error desconocido'
+      const full = `${name}${msg}`
+      console.error('[Scale] connect error:', full, err)
       // User cancelled the device picker — not an error
       if (msg.toLowerCase().includes('cancel') || msg.toLowerCase().includes('chose')) {
         setStatus('disconnected')
       } else {
-        setError(msg)
+        setError(full)
         setStatus('error')
       }
     }
