@@ -188,18 +188,37 @@ export function useBluetoothScale(): ScaleHookReturn {
       // acceptAllDevices lets the user pick any scale.
       // optionalServices must list every GATT service we might access — the
       // browser blocks access to services not declared here even if GATT-connected.
-      const device = await navigator.bluetooth.requestDevice({
+      //
+      // optionalManufacturerData tells Chrome which company IDs to expose in
+      // advertisementreceived events (needed for advertisement-only scales like 'da').
+      // Some older Chrome builds throw NotSupportedError if this key is present, so
+      // we try with it first and silently retry without it on failure.
+      // Definite assignment assertion: TypeScript can't see that device is always
+      // assigned before use — either the first requestDevice succeeds, the retry
+      // succeeds, or the outer catch handles the error before device is accessed.
+      let device!: BluetoothDevice
+      const baseOptions = {
         acceptAllDevices: true,
         optionalServices: [
-          // Only service UUIDs go here — characteristic UUIDs must NOT be listed
-          // (Chrome throws "no es compatible" if it sees a non-service UUID here).
-          // NUS characteristics are accessed via getPrimaryServices → getCharacteristics,
-          // so only the parent NUS service UUID (6e400001-...) is needed.
           ...Object.values(GATT_SCALES).map((s) => s.serviceUuid),
         ],
-        // Declare the company IDs we want to receive advertisement data from.
-        optionalManufacturerData: ADV_SCALES.map((s) => s.companyId),
-      } as RequestDeviceOptions) // cast: optionalManufacturerData is not yet in TS types
+      }
+      try {
+        device = await navigator.bluetooth.requestDevice({
+          ...baseOptions,
+          optionalManufacturerData: ADV_SCALES.map((s) => s.companyId),
+        } as RequestDeviceOptions)
+      } catch (firstErr) {
+        const firstMsg = firstErr instanceof Error ? firstErr.message : ''
+        // If the user cancelled, propagate immediately — don't show the picker again
+        if (firstMsg.toLowerCase().includes('cancel') || firstMsg.toLowerCase().includes('chose')) {
+          throw firstErr
+        }
+        // NotSupportedError likely means optionalManufacturerData isn't supported —
+        // retry without it (advertisement data may not be received, but GATT scales work)
+        console.warn('[Scale] requestDevice with optionalManufacturerData failed, retrying without:', firstMsg)
+        device = await navigator.bluetooth.requestDevice(baseOptions)
+      }
 
       deviceRef.current = device
       setDeviceName(device.name ?? 'Báscula')
