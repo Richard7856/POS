@@ -3,26 +3,96 @@
 import { useState, useCallback, useRef } from 'react'
 
 // ─── GATT-connectable scales (service + notify characteristic) ───────────────
-// These scales accept a GATT connection and push weight via BLE notifications.
-const GATT_SCALES = {
+// Each entry must include the full 128-bit service UUID so matching works for
+// both standard short-UUID services (0000xxxx-...) and vendor 128-bit UUIDs
+// like the Nordic UART Service used by the Assistrus B03H.
+interface GattScaleDef {
+  serviceUuid: string    // full 128-bit UUID (lowercase)
+  notifyUuid?: string    // optional: pin to a specific notify characteristic
+  parse(b: Uint8Array): number | null
+}
+
+const GATT_SCALES: Record<string, GattScaleDef> = {
   // Femmto BWS12: header=0xAC, weight at bytes[4:5] Big-Endian, raw/1000=kg
   femmto: {
-    serviceShort: 'ffb0',
-    parse(b: Uint8Array): number | null {
+    serviceUuid: '0000ffb0-0000-1000-8000-00805f9b34fb',
+    parse(b) {
       if (b[0] !== 0xac || b.length < 6) return null
-      return ((b[4] << 8) | b[5]) / 1000 // kg
+      return ((b[4] << 8) | b[5]) / 1000
     },
   },
   // Arboleaf QN-KS: header=0x10, weight at bytes[9:10] Big-Endian
   arboleaf: {
-    serviceShort: 'fff0',
-    parse(b: Uint8Array): number | null {
+    serviceUuid: '0000fff0-0000-1000-8000-00805f9b34fb',
+    parse(b) {
       if (b[0] !== 0x10 || b.length < 11) return null
       const raw = (b[9] << 8) | b[10]
-      return (b[5] === 0x02 ? raw / 10 : raw) / 1000 // normalize to kg
+      return (b[5] === 0x02 ? raw / 10 : raw) / 1000
     },
   },
-} as const
+  // Assistrus B03H (and similar NUS-based scales):
+  //   Uses Nordic UART Service — scale pushes weight as ASCII text via
+  //   the TX notify characteristic (6e400003-...).
+  //
+  // Common formats seen in NUS scales (auto-detected by parser below):
+  //   "  75.150\r\n"        → kg assumed
+  //   "75150\r\n"           → grams (>999 with no decimal → /1000)
+  //   "75.15 KG\r\n"        → explicit kg label
+  //   "75150 G\r\n"         → explicit grams label
+  //   Binary 3-byte: [0x??, high, low] → needs calibration if ASCII fails
+  //
+  // The raw bytes and the decoded text are ALWAYS logged to the browser
+  // console (label "[Scale NUS]") so the exact format can be confirmed
+  // against what the scale's display shows. Update the parser once confirmed.
+  assistrus_nus: {
+    serviceUuid: '6e400001-b5a3-f393-e0a9-e50e24dcca9f',
+    notifyUuid:  '6e400003-b5a3-f393-e0a9-e50e24dcca9f',
+    parse(b) {
+      const hex = Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join(' ')
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(b).trim()
+      console.log('[Scale NUS] raw bytes:', hex)
+      console.log('[Scale NUS] text decoded:', JSON.stringify(text))
+
+      // ── Try ASCII path first (most NUS scales send human-readable text) ──
+      // Match optional whitespace, a decimal number, optional unit
+      const asciiMatch = text.match(/([0-9]+\.?[0-9]*)\s*(kg|g|lb)?/i)
+      if (asciiMatch) {
+        const num  = parseFloat(asciiMatch[1])
+        const unit = (asciiMatch[2] ?? '').toLowerCase()
+
+        let kg: number
+        if (unit === 'g' || (!unit && num > 999)) {
+          // No unit + large number → treat as grams
+          kg = num / 1000
+        } else if (unit === 'lb') {
+          kg = num * 0.453592
+        } else {
+          // 'kg' or ambiguous small number → kg
+          kg = num
+        }
+
+        if (kg > 0 && kg < 300) {
+          console.log('[Scale NUS] parsed kg:', kg)
+          return Math.round(kg * 1000) / 1000
+        }
+      }
+
+      // ── Fallback: try binary candidates and log them for calibration ──────
+      if (b.length >= 3) {
+        const candidates = {
+          'b[0:1]_BE /100': ((b[0] << 8) | b[1]) / 100,
+          'b[1:2]_BE /100': ((b[1] << 8) | b[2]) / 100,
+          'b[0:1]_LE /100': ((b[1] << 8) | b[0]) / 100,
+          'b[1:2]_LE /100': ((b[2] << 8) | b[1]) / 100,
+        }
+        console.log('[Scale NUS] binary candidates:', candidates)
+      }
+
+      // Could not parse — data will appear once the format is confirmed
+      return null
+    },
+  },
+}
 
 // ─── Advertisement-only scales (Connectable: No in nRF Connect) ──────────────
 // These scales broadcast weight in BLE advertisement manufacturer data.
@@ -116,16 +186,18 @@ export function useBluetoothScale(): ScaleHookReturn {
       setError(null)
 
       // acceptAllDevices lets the user pick any scale.
-      // optionalServices needed for GATT access; optionalManufacturerData
-      // tells the browser to include manufacturer data in advertisement events.
+      // optionalServices must list every GATT service we might access — the
+      // browser blocks access to services not declared here even if GATT-connected.
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [
-          '0000ffb0-0000-1000-8000-00805f9b34fb', // femmto
-          '0000fff0-0000-1000-8000-00805f9b34fb', // arboleaf
+          ...Object.values(GATT_SCALES).map((s) => s.serviceUuid),
+          // NUS notify characteristic also needs to be declared so Chrome lets us
+          // call getCharacteristic() on it from within the primary service.
+          '6e400003-b5a3-f393-e0a9-e50e24dcca9f',
+          '6e400002-b5a3-f393-e0a9-e50e24dcca9f',
         ],
         // Declare the company IDs we want to receive advertisement data from.
-        // Without this the browser may filter out manufacturer data events.
         optionalManufacturerData: ADV_SCALES.map((s) => s.companyId),
       } as RequestDeviceOptions) // cast: optionalManufacturerData is not yet in TS types
 
@@ -231,10 +303,10 @@ async function tryGattConnect(
     const services = await server.getPrimaryServices()
 
     for (const svc of services) {
-      const shortId = svc.uuid.slice(4, 8)
-
+      // Match by full 128-bit UUID — works for both standard (0000xxxx-...) and
+      // vendor UUIDs like the Nordic UART Service (6e400001-...).
       const scaleDef = Object.values(GATT_SCALES).find(
-        (s) => s.serviceShort === shortId
+        (s) => s.serviceUuid === svc.uuid
       )
       if (!scaleDef) continue
 
@@ -245,9 +317,12 @@ async function tryGattConnect(
         continue
       }
 
-      const notifyChar = chars.find(
-        (c) => c.properties.notify || c.properties.indicate
-      )
+      // If the scale def specifies a particular notify characteristic (e.g. NUS TX),
+      // use that; otherwise fall back to the first notify/indicate characteristic.
+      const notifyChar = scaleDef.notifyUuid
+        ? chars.find((c) => c.uuid === scaleDef.notifyUuid)
+        : chars.find((c) => c.properties.notify || c.properties.indicate)
+
       if (!notifyChar) continue
 
       notifyChar.addEventListener('characteristicvaluechanged', (e: Event) => {
