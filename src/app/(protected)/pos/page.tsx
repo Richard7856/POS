@@ -16,6 +16,7 @@ export default function POSPage() {
 
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('Todos')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -36,19 +37,27 @@ export default function POSPage() {
 
   useEffect(() => {
     async function loadProducts() {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('activo', true)
-        .order('categoria', { ascending: true })
-        .order('nombre', { ascending: true })
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select('*')
+          .eq('activo', true)
+          .order('categoria', { ascending: true })
+          .order('nombre', { ascending: true })
 
-      if (error) console.error('Error cargando productos:', error.message)
-      setProducts(data ?? [])
-      setLoading(false)
+        if (error) throw error
+        setProducts(data ?? [])
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Error de conexión'
+        console.error('Error cargando productos:', msg)
+        setLoadError(msg)
+      } finally {
+        // Always unblock the UI — even on network failure the skeleton must resolve
+        setLoading(false)
+      }
     }
-    loadProducts()
-  }, [])
+    if (loading) loadProducts()
+  }, [loading])
 
   // Re-evaluate combo notifications every time the cart changes
   useEffect(() => {
@@ -226,6 +235,20 @@ export default function POSPage() {
   }
 
   if (loading) return <POSSkeleton />
+
+  if (loadError) return (
+    <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
+      <p className="text-4xl">⚠️</p>
+      <p className="text-gray-700 font-medium">No se pudieron cargar los productos</p>
+      <p className="text-sm text-gray-400">{loadError}</p>
+      <button
+        onClick={() => { setLoadError(null); setLoading(true) }}
+        className="mt-2 px-5 py-2 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-700"
+      >
+        Reintentar
+      </button>
+    </div>
+  )
 
   return (
     <div className="flex flex-col md:flex-row h-full overflow-hidden">
