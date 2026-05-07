@@ -10,6 +10,7 @@ import WeightModal from '@/components/WeightModal'
 import CheckoutModal from '@/components/CheckoutModal'
 import MovimientoCajaModal from '@/components/MovimientoCajaModal'
 import { POSSkeleton } from '@/components/Skeleton'
+import { getProductsCache, saveProductsCache } from '@/lib/productCache'
 
 export default function POSPage() {
   const { profile } = useAuth()
@@ -37,6 +38,14 @@ export default function POSPage() {
 
   useEffect(() => {
     async function loadProducts() {
+      // Serve cached products immediately — POS is usable offline with stale catalog
+      const cached = getProductsCache().filter((p) => p.activo)
+      if (cached.length > 0) {
+        setProducts(cached)
+        setLoading(false)
+        if (!navigator.onLine) return   // offline: stay on cached data
+      }
+
       try {
         const { data, error } = await supabase
           .from('products')
@@ -46,13 +55,15 @@ export default function POSPage() {
           .order('nombre', { ascending: true })
 
         if (error) throw error
-        setProducts(data ?? [])
+        const fresh = data ?? []
+        setProducts(fresh)
+        saveProductsCache(fresh)  // refresh cache with latest data
       } catch (err: unknown) {
+        if (cached.length > 0) return   // already showing cached — don't show error
         const msg = err instanceof Error ? err.message : 'Error de conexión'
         console.error('Error cargando productos:', msg)
         setLoadError(msg)
       } finally {
-        // Always unblock the UI — even on network failure the skeleton must resolve
         setLoading(false)
       }
     }

@@ -6,6 +6,8 @@ import { useAuth } from '@/context/AuthContext'
 import { Product } from '@/lib/types'
 import MarginCalculator, { computePrecioVenta } from '@/components/MarginCalculator'
 import BarcodeScanner from '@/components/BarcodeScanner'
+import { getProductsCache, saveProductsCache, upsertProductCache } from '@/lib/productCache'
+import { enqueue, getPendingCount } from '@/lib/offlineQueue'
 
 type MarginMode = 'porcentaje' | 'monto'
 
@@ -37,18 +39,53 @@ export default function ProductosPage() {
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm]       = useState(false)
   const [showScanner, setShowScanner] = useState(false)
+  const [isOnline, setIsOnline]       = useState(true)
+  const [pendingCount, setPendingCount] = useState(0)
+
+  const refreshPending = () => setPendingCount(getPendingCount())
 
   const loadProducts = async () => {
+    // Show cached data immediately so the page is usable even without network
+    const cached = getProductsCache()
+    if (cached.length > 0) {
+      setProducts(cached)
+      setLoading(false)
+    }
+
+    if (!navigator.onLine) {
+      setIsOnline(false)
+      setLoading(false)
+      return
+    }
+
+    // Fetch fresh data in background (or foreground on first load)
     const { data } = await supabase
       .from('products')
       .select('*')
       .order('categoria', { ascending: true })
       .order('nombre', { ascending: true })
-    setProducts(data ?? [])
+
+    if (data) {
+      setProducts(data)
+      saveProductsCache(data)  // keep cache warm for next offline session
+    }
     setLoading(false)
   }
 
-  useEffect(() => { loadProducts() }, [])
+  useEffect(() => {
+    loadProducts()
+    setIsOnline(navigator.onLine)
+    refreshPending()
+
+    const onOnline  = () => { setIsOnline(true);  loadProducts(); refreshPending() }
+    const onOffline = () => { setIsOnline(false); refreshPending() }
+    window.addEventListener('online',  onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online',  onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Determine the effective sell price:
   // - If cost + margin are filled → use computed price
@@ -72,17 +109,57 @@ export default function ProductosPage() {
       stock_minimo: form.stock_minimo ? parseFloat(form.stock_minimo) : null,
     }
 
-    if (editingId) {
-      await supabase.from('products').update(payload).eq('id', editingId)
+    if (navigator.onLine) {
+      // Online path: write directly to Supabase then reload
+      if (editingId) {
+        await supabase.from('products').update(payload).eq('id', editingId)
+      } else {
+        await supabase.from('products').insert({ ...payload, activo: true })
+      }
+      loadProducts()
     } else {
-      await supabase.from('products').insert({ ...payload, activo: true })
+      // Offline path: queue the op + update local state immediately
+      const now = new Date().toISOString()
+      if (editingId) {
+        enqueue({
+          table: 'products',
+          action: 'update',
+          payload: payload as Record<string, unknown>,
+          filter: [{ key: 'id', val: editingId }],
+        })
+        const updated: Product = {
+          ...(products.find((p) => p.id === editingId) as Product),
+          ...payload,
+        }
+        setProducts((prev) => prev.map((p) => p.id === editingId ? updated : p))
+        upsertProductCache(updated)
+      } else {
+        // Generate UUID client-side so the row has its final ID before hitting the server
+        const newId = crypto.randomUUID()
+        const newProduct: Product = {
+          id: newId,
+          activo: true,
+          sucursal_id: profile?.sucursal_id ?? null,
+          created_at: now,
+          ...(payload as Omit<Product, 'id' | 'activo' | 'sucursal_id' | 'created_at'>),
+        }
+        enqueue({
+          table: 'products',
+          action: 'insert',
+          payload: { ...newProduct } as Record<string, unknown>,
+        })
+        setProducts((prev) => [...prev, newProduct])
+        upsertProductCache(newProduct)
+      }
+      refreshPending()
+      // Notify SyncProvider to refresh its count
+      ;(window as Window & { __posRefreshPending?: () => void }).__posRefreshPending?.()
     }
 
     setSaving(false)
     setForm(EMPTY_FORM)
     setEditingId(null)
     setShowForm(false)
-    loadProducts()
   }
 
   const handleEdit = (product: Product) => {
@@ -103,8 +180,23 @@ export default function ProductosPage() {
   }
 
   const handleToggleActive = async (product: Product) => {
-    await supabase.from('products').update({ activo: !product.activo }).eq('id', product.id)
-    loadProducts()
+    const newActivo = !product.activo
+    if (navigator.onLine) {
+      await supabase.from('products').update({ activo: newActivo }).eq('id', product.id)
+      loadProducts()
+    } else {
+      enqueue({
+        table: 'products',
+        action: 'update',
+        payload: { activo: newActivo },
+        filter: [{ key: 'id', val: product.id }],
+      })
+      const updated = { ...product, activo: newActivo }
+      setProducts((prev) => prev.map((p) => p.id === product.id ? updated : p))
+      upsertProductCache(updated)
+      refreshPending()
+      ;(window as Window & { __posRefreshPending?: () => void }).__posRefreshPending?.()
+    }
   }
 
   if (loading) return <div className="p-8 text-gray-400">Cargando...</div>
@@ -118,8 +210,20 @@ export default function ProductosPage() {
           onClose={() => setShowScanner(false)}
         />
       )}
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-xl font-bold text-gray-800">📦 Productos</h1>
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">📦 Productos</h1>
+          {!isOnline && (
+            <p className="text-xs text-amber-600 mt-0.5">
+              Sin conexión — los cambios se guardarán al reconectarte
+            </p>
+          )}
+          {isOnline && pendingCount > 0 && (
+            <p className="text-xs text-green-600 mt-0.5">
+              ⟳ Sincronizando {pendingCount} cambio{pendingCount !== 1 ? 's' : ''} pendiente{pendingCount !== 1 ? 's' : ''}...
+            </p>
+          )}
+        </div>
         <button
           onClick={() => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true) }}
           className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"

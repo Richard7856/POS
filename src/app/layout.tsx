@@ -3,6 +3,7 @@ import { Geist } from 'next/font/google'
 import './globals.css'
 import Navbar from '@/components/Navbar'
 import { AuthProvider } from '@/context/AuthContext'
+import SyncProvider from '@/components/SyncProvider'
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist' })
 
@@ -16,9 +17,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="es" className={`${geist.variable} h-full`}>
       <body className="h-full flex flex-col bg-gray-50 text-gray-900 antialiased">
         <AuthProvider>
-          <Navbar />
-          {/* flex-1 + overflow-hidden so POS grid fills the remaining viewport height */}
-          <main className="flex-1 overflow-hidden">{children}</main>
+          <SyncProvider>
+            <Navbar />
+            {/* flex-1 + overflow-hidden so POS grid fills the remaining viewport height */}
+            <main className="flex-1 overflow-hidden">{children}</main>
+          </SyncProvider>
         </AuthProvider>
       </body>
     </html>
