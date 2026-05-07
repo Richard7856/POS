@@ -24,6 +24,8 @@ export interface Product {
   unidad: 'kg' | 'g' | 'pieza'
   categoria: string | null
   activo: boolean
+  // EAN-13 / EAN-8 / UPC-A barcode for quick lookup at checkout
+  ean: string | null
   // precio_compra is only visible to admin/encargado (hidden from cajero in UI)
   precio_compra: number | null
   // stock_minimo: kg threshold that triggers reorder alert. NULL = no minimum set.

@@ -5,30 +5,19 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { Product } from '@/lib/types'
 import MarginCalculator, { computePrecioVenta } from '@/components/MarginCalculator'
+import BarcodeScanner from '@/components/BarcodeScanner'
 
 type MarginMode = 'porcentaje' | 'monto'
 
-// Predefined categories for a recaudería / fruit & vegetable / grocery store
-const CATEGORIAS = [
-  'Frutas',
-  'Verduras',
-  'Chiles',
-  'Hierbas y especias',
-  'Granos y legumbres',
-  'Cereales',
-  'Básicos',
-  'Lácteos',
-  'Bebidas',
-  'Limpieza',
-  'Botanas',
-  'Otros',
-]
+// Only three categories for now — expand later if needed
+const CATEGORIAS = ['Frutas', 'Verduras', 'Abarrotes']
 
 const EMPTY_FORM = {
   nombre: '',
   precio_por_unidad: '',
   unidad: 'kg' as Product['unidad'],
   categoria: '',
+  ean: '',
   // Minimum stock in kg — triggers reorder alert when stock falls below this
   stock_minimo: '',
   // Margin calculator fields (admin/encargado only)
@@ -46,7 +35,8 @@ export default function ProductosPage() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm]       = useState(false)
+  const [showScanner, setShowScanner] = useState(false)
 
   const loadProducts = async () => {
     const { data } = await supabase
@@ -77,6 +67,7 @@ export default function ProductosPage() {
       precio_por_unidad: parseFloat(effectivePrecio),
       unidad: form.unidad,
       categoria: form.categoria.trim() || null,
+      ean: form.ean.trim() || null,
       precio_compra: form.precio_compra ? parseFloat(form.precio_compra) : null,
       stock_minimo: form.stock_minimo ? parseFloat(form.stock_minimo) : null,
     }
@@ -100,6 +91,7 @@ export default function ProductosPage() {
       precio_por_unidad: product.precio_por_unidad.toString(),
       unidad: product.unidad,
       categoria: product.categoria ?? '',
+      ean: product.ean ?? '',
       stock_minimo: product.stock_minimo?.toString() ?? '',
       precio_compra: product.precio_compra?.toString() ?? '',
       margin_mode: 'porcentaje',
@@ -119,6 +111,13 @@ export default function ProductosPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto overflow-y-auto h-full">
+      {/* Full-screen barcode scanner overlay */}
+      {showScanner && (
+        <BarcodeScanner
+          onScan={(ean) => { setForm((f) => ({ ...f, ean })); setShowScanner(false) }}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold text-gray-800">📦 Productos</h1>
         <button
@@ -192,9 +191,7 @@ export default function ProductosPage() {
 
             {/* Categoría */}
             <div className="col-span-2">
-              <label className="block text-sm text-gray-600 mb-1">
-                Categoría <span className="text-gray-400 font-normal">(opcional)</span>
-              </label>
+              <label className="block text-sm text-gray-600 mb-1">Categoría</label>
               <select
                 value={form.categoria}
                 onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}
@@ -204,7 +201,37 @@ export default function ProductosPage() {
                 {CATEGORIAS.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
+                {/* Preserve legacy category when editing an older product */}
+                {form.categoria && !CATEGORIAS.includes(form.categoria) && (
+                  <option value={form.categoria}>{form.categoria} (anterior)</option>
+                )}
               </select>
+            </div>
+
+            {/* EAN barcode — optional, used for quick lookup */}
+            <div className="col-span-2">
+              <label className="block text-sm text-gray-600 mb-1">
+                Código EAN <span className="text-gray-400 font-normal">(opcional)</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={form.ean}
+                  onChange={(e) => setForm((f) => ({ ...f, ean: e.target.value }))}
+                  placeholder="Ej: 7501234567890"
+                  maxLength={20}
+                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 font-mono"
+                />
+                {/* Camera scan button — uses BarcodeDetector API on Chrome Android */}
+                <button
+                  type="button"
+                  onClick={() => setShowScanner(true)}
+                  className="px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg text-lg hover:bg-gray-200 transition-colors"
+                  title="Escanear con cámara"
+                >
+                  📷
+                </button>
+              </div>
             </div>
           </div>
 
@@ -270,6 +297,7 @@ export default function ProductosPage() {
               )}
               <th className="text-left px-4 py-3 text-gray-500 font-medium">Unidad</th>
               <th className="text-left px-4 py-3 text-gray-500 font-medium hidden sm:table-cell">Categoría</th>
+              <th className="text-left px-4 py-3 text-gray-500 font-medium hidden lg:table-cell">EAN</th>
               {canSeeCost && (
                 <th className="text-right px-4 py-3 text-gray-500 font-medium hidden md:table-cell">Stock mín.</th>
               )}
@@ -291,6 +319,7 @@ export default function ProductosPage() {
                 )}
                 <td className="px-4 py-3 text-gray-500">{product.unidad}</td>
                 <td className="px-4 py-3 text-gray-400 hidden sm:table-cell">{product.categoria ?? '—'}</td>
+                <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">{product.ean ?? '—'}</td>
                 {canSeeCost && (
                   <td className="px-4 py-3 text-right text-gray-400 tabular-nums hidden md:table-cell text-xs">
                     {product.stock_minimo != null ? `${product.stock_minimo} kg` : '—'}
