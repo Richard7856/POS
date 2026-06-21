@@ -186,7 +186,7 @@ export default function PromocionesPage() {
       })(),
       supabase
         .from('products')
-        .select('id, nombre, unidad, categoria, precio_por_unidad, activo, precio_compra, stock_minimo, sucursal_id, created_at')
+        .select('*')
         .eq('activo', true)
         .order('nombre'),
     ])
