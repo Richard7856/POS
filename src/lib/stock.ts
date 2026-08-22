@@ -106,12 +106,6 @@ export function planFifo(lotes: LoteStock[], cantidadKg: number): PlanFifo {
   return { updates, primaryLoteId, porciones, faltante }
 }
 
-/** La cantidad del carrito llevada a kg, que es como se guarda el inventario. */
-export function aKg(cantidad: number, unidad: string): number {
-  return unidad === 'g' ? cantidad / 1000 : cantidad
-}
-
-/** Sólo los productos a granel llevan control de lotes. */
-export function usaInventario(unidad: string): boolean {
-  return unidad === 'kg' || unidad === 'g'
-}
+// La conversión a unidad de inventario vive en unidades.ts (aInventario).
+// Todos los productos pueden llevar lotes, incluidos los que se venden por
+// pieza: un manojo de cilantro también es inventario que se acaba.

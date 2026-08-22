@@ -13,7 +13,8 @@ import CuentasBar from '@/components/CuentasBar'
 import { useCuentas } from '@/hooks/useCuentas'
 import { POSSkeleton } from '@/components/Skeleton'
 import { getProductsCache, saveProductsCache } from '@/lib/productCache'
-import { stockDeLotes, aKg, usaInventario } from '@/lib/stock'
+import { stockDeLotes } from '@/lib/stock'
+import { aInventario, etiquetaInventario, decimales } from '@/lib/unidades'
 
 export default function POSPage() {
   const { profile } = useAuth()
@@ -205,7 +206,7 @@ export default function POSPage() {
     const enCuentas = cuentas.reduce(
       (s, c) => s + c.cart
         .filter((i) => i.product.id === productId)
-        .reduce((k, i) => k + aKg(i.cantidad, i.product.unidad), 0),
+        .reduce((k, i) => k + aInventario(i.cantidad, i.product.unidad), 0),
       0,
     )
     return parseFloat((registrado - enCuentas).toFixed(6))
@@ -432,7 +433,7 @@ export default function POSPage() {
             <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {filtered.map((product) => {
                 const badge = getPromoBadge(product)
-                const libre   = usaInventario(product.unidad) ? stockLibre(product.id) : null
+                const libre   = stockLibre(product.id)
                 const agotado = libre !== null && libre <= 0
                 return (
                   <button key={product.id} onClick={() => handleProductTap(product)}
@@ -459,7 +460,9 @@ export default function POSPage() {
                         <span className={`tabular-nums font-medium ${
                           libre <= 0 ? 'text-red-600' : libre < 1 ? 'text-amber-600' : 'text-gray-400'
                         }`}>
-                          {libre <= 0 ? (libre < 0 ? `${libre.toFixed(1)} kg` : 'Agotado') : `${libre.toFixed(1)} kg`}
+                          {libre === 0
+                            ? 'Agotado'
+                            : `${libre.toFixed(decimales(product.unidad))} ${etiquetaInventario(product.unidad, libre)}`}
                         </span>
                       )}
                     </div>
@@ -520,7 +523,7 @@ export default function POSPage() {
       {/* Weight modal */}
       {selectedProduct && (
         <WeightModal product={selectedProduct} scale={scale}
-          stockDisponible={usaInventario(selectedProduct.unidad) ? stockLibre(selectedProduct.id) : null}
+          stockDisponible={stockLibre(selectedProduct.id)}
           puedeForzar={puedeForzarStock}
           onConfirm={(cantidad) => { addToCart(selectedProduct, cantidad); setSelectedProduct(null) }}
           onClose={() => setSelectedProduct(null)}

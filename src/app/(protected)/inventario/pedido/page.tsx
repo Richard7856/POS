@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import SinSucursal from '@/components/SinSucursal'
+import { formatInventario, decimales } from '@/lib/unidades'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,6 @@ export default function PedidoPage() {
       .from('products')
       .select('id, nombre, categoria, unidad, stock_minimo, precio_compra')
       .eq('activo', true)
-      .in('unidad', ['kg', 'g'])
       .not('stock_minimo', 'is', null)
       .order('categoria', { ascending: true })
       .order('nombre', { ascending: true })
@@ -105,6 +105,8 @@ export default function PedidoPage() {
 
       // precio_compra va en la unidad del producto; el faltante está en kg.
       // Para productos en gramos el costo por kg es ×1000.
+      // El faltante está en unidad de inventario (kg o piezas); precio_compra
+      // viene en unidad de venta, así que sólo los gramos necesitan conversión.
       const costoKg = p.precio_compra == null
         ? null
         : p.unidad === 'g' ? p.precio_compra * 1000 : p.precio_compra
@@ -143,7 +145,7 @@ export default function PedidoPage() {
       ...items.map((item) => {
         const emoji = item.urgencia === 'agotado' ? '🔴' : item.urgencia === 'critico' ? '🟠' : '🟡'
         const costo = item.costo_estimado != null ? `  ≈$${item.costo_estimado.toFixed(0)}` : ''
-        return `${emoji} ${item.nombre.padEnd(24)} necesita ${item.faltante.toFixed(1)} kg  (tiene ${item.stock_actual.toFixed(1)} / mín ${item.stock_minimo} kg)${costo}`
+        return `${emoji} ${item.nombre.padEnd(24)} necesita ${formatInventario(item.faltante, item.unidad)}  (tiene ${formatInventario(item.stock_actual, item.unidad)} / mín ${item.stock_minimo})${costo}`
       }),
       ...(costoTotalPedido > 0
         ? ['', `💰 Costo estimado del pedido: $${costoTotalPedido.toFixed(0)}`]
@@ -294,7 +296,7 @@ export default function PedidoPage() {
                             />
                           </div>
                           <span className="text-xs text-gray-400 tabular-nums">
-                            {item.stock_actual.toFixed(1)} / {item.stock_minimo} kg
+                            {item.stock_actual.toFixed(decimales(item.unidad))} / {formatInventario(item.stock_minimo, item.unidad)}
                           </span>
                         </div>
                       </div>
@@ -302,7 +304,7 @@ export default function PedidoPage() {
                       {/* Faltante — what to order */}
                       <div className="text-right flex-shrink-0">
                         <p className={`font-bold tabular-nums text-sm ${cfg.text}`}>
-                          +{item.faltante.toFixed(1)} kg
+                          +{formatInventario(item.faltante, item.unidad)}
                         </p>
                         <p className="text-xs text-gray-400 tabular-nums">
                           {item.costo_estimado != null

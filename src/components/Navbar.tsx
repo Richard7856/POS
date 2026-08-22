@@ -65,7 +65,6 @@ export default function Navbar() {
         .from('products')
         .select('id, stock_minimo')
         .eq('activo', true)
-        .in('unidad', ['kg', 'g'])
         .not('stock_minimo', 'is', null)
 
       if (!prods || prods.length === 0) return

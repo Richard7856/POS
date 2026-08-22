@@ -149,6 +149,34 @@ solo y cada registro muestra el dinero perdido al costo del lote.
 Entradas, merma, pedido y corte operan por sucursal: un perfil sin sucursal
 asignada ve un aviso claro (antes fallaban en silencio con pantallas vacías).
 
+## Compra por bulto (caja, manojo grande, arpilla)
+
+Cuando se compra en una unidad y se vende en otra —el cilantro llega en manojo
+grande a $35 y de ahí salen 20-30 manojos chicos de $1— la entrada se registra
+en modo **Por bulto**:
+
+```
+1 manojo grande × $35            = $35.00
+Rinde 25 pzas                    → $1.40 por pza
+```
+
+El rendimiento se captura en cada compra, no como factor fijo del producto: un
+manojo grande rinde 20 unas veces y 30 otras, y eso mueve el costo real. La
+siguiente vez el formulario sugiere el rendimiento de la compra anterior,
+proporcional a los bultos que se capturen.
+
+El costo unitario resultante se guarda en el lote y actualiza el catálogo, así
+que el margen de ese producto queda correcto en automático. Si el precio de
+venta no cubre el costo, el desglose lo dice y sugiere el precio mínimo.
+
+`lotes` guarda `bultos`, `costo_por_bulto` y `unidad_bulto` para poder ver
+después a qué precio venía el bulto y cuánto rindió de verdad.
+
+**Los productos por pieza también llevan inventario.** Antes sólo kg/g tenían
+lotes, así que los manojos y las lechugas eran invisibles para el control de
+existencias, el pedido y la merma. La unidad de inventario es kg para granel y
+piezas para lo demás (`lib/unidades.ts`).
+
 ## Control de existencias al vender
 
 El POS muestra en cada tarjeta los kg disponibles (descontando lo ya apartado

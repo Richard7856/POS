@@ -24,7 +24,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { CartItem } from '@/lib/types'
 import { costoPonderadoKg, costoKgAUnidad } from '@/lib/ganancia'
-import { planFifo, aKg, usaInventario } from '@/lib/stock'
+import { planFifo } from '@/lib/stock'
+import { aInventario } from '@/lib/unidades'
 import TicketReceipt from '@/components/TicketReceipt'
 
 type MetodoPago = 'efectivo' | 'tarjeta' | 'transferencia'
@@ -202,8 +203,10 @@ export default function CheckoutModal({
           let costo_unitario: number | null =
             item.product.precio_compra ?? null
 
-          if (usaInventario(item.product.unidad)) {
-            const cantidadKg = aKg(item.cantidad, item.product.unidad)
+          // Todos los productos llevan lotes, incluidos los de por pieza:
+          // un manojo de cilantro también es inventario que se acaba.
+          {
+            const cantidadKg = aInventario(item.cantidad, item.product.unidad)
             const { primaryLoteId, loteUpdates, costoPorKg } = await resolveFifoLotes(
               item.product.id, cantidadKg,
             )

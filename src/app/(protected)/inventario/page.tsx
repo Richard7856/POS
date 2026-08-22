@@ -55,7 +55,6 @@ export default function InventarioPage() {
         .from('products')
         .select('id, stock_minimo')
         .eq('activo', true)
-        .in('unidad', ['kg', 'g'])
         .not('stock_minimo', 'is', null)
       if (sucursalId) {
         entradasQ = entradasQ.eq('sucursal_id', sucursalId)

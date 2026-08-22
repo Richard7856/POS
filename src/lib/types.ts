@@ -223,6 +223,11 @@ export interface Lote {
   cantidad_inicial: number       // kg entered
   cantidad_disponible: number    // kg remaining (initial - sold - wasted)
   costo_por_unidad: number | null
+  // Compra por bulto (caja, manojo grande, arpilla). NULL = se capturó
+  // directamente en la unidad de venta. costo_por_unidad se deriva de aquí.
+  bultos: number | null
+  costo_por_bulto: number | null
+  unidad_bulto: string | null
   proveedor: string | null
   notas: string | null
   creado_por: string | null

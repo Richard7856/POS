@@ -7,6 +7,7 @@ import { useAuth } from '@/context/AuthContext'
 import { Product } from '@/lib/types'
 import MarginCalculator, { computePrecioVenta } from '@/components/MarginCalculator'
 import { calcGanancia } from '@/lib/ganancia'
+import { formatInventario, etiquetaInventario } from '@/lib/unidades'
 import BarcodeScanner from '@/components/BarcodeScanner'
 import { getProductsCache, saveProductsCache, upsertProductCache } from '@/lib/productCache'
 import { enqueue, getPendingCount } from '@/lib/offlineQueue'
@@ -423,10 +424,10 @@ export default function ProductosPage() {
           </div>
 
           {/* Stock mínimo — solo para productos a granel (kg/g) */}
-          {canSeeCost && (form.unidad === 'kg' || form.unidad === 'g') && (
+          {canSeeCost && (
             <div>
               <label className="block text-sm text-gray-600 mb-1">
-                Stock mínimo (kg)
+                Stock mínimo ({etiquetaInventario(form.unidad, 2)})
                 <span className="ml-1 text-gray-400 font-normal">(opcional — dispara alerta de pedido)</span>
               </label>
               <input
@@ -522,9 +523,7 @@ export default function ProductosPage() {
                   )
                 })()}
                 <td className="px-4 py-3 text-right tabular-nums text-xs">
-                  {product.unidad === 'pieza' ? (
-                    <span className="text-gray-300">—</span>
-                  ) : (() => {
+                  {(() => {
                     const stock = stockMap.get(product.id)
                     // Sin entradas capturadas no es lo mismo que estar en cero:
                     // ese producto todavía no lleva control de inventario.
@@ -539,7 +538,7 @@ export default function ProductosPage() {
                           : bajo ? 'text-amber-600 font-semibold'
                           : 'text-gray-600'
                       }>
-                        {stock.toFixed(1)} kg{stock < 0 || (bajo && stock > 0) ? ' ⚠' : ''}
+                        {formatInventario(stock, product.unidad)}{stock < 0 || (bajo && stock > 0) ? ' ⚠' : ''}
                       </span>
                     )
                   })()}
@@ -549,7 +548,7 @@ export default function ProductosPage() {
                 <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">{product.ean ?? '—'}</td>
                 {canSeeCost && (
                   <td className="px-4 py-3 text-right text-gray-400 tabular-nums hidden md:table-cell text-xs">
-                    {product.stock_minimo != null ? `${product.stock_minimo} kg` : '—'}
+                    {product.stock_minimo != null ? formatInventario(product.stock_minimo, product.unidad) : '—'}
                   </td>
                 )}
                 <td className="px-4 py-3">

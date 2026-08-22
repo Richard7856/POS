@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { Product } from '@/lib/types'
 import type { ScaleHookReturn } from '@/hooks/useBluetoothScale'
-import { evaluarStock, aKg } from '@/lib/stock'
+import { evaluarStock } from '@/lib/stock'
+import { aInventario, etiquetaInventario, decimales } from '@/lib/unidades'
 
 interface Props {
   product: Product
@@ -44,7 +45,7 @@ export default function WeightModal({
 
   // ── Control de existencias ────────────────────────────────────────────────
   // El inventario se lleva en kg aunque el producto se venda por gramo.
-  const pedidoKg = aKg(effectiveValue, product.unidad)
+  const pedidoKg = aInventario(effectiveValue, product.unidad)
   const estado   = evaluarStock(stockDisponible, pedidoKg)
   const faltanKg = parseFloat((pedidoKg - (stockDisponible ?? 0)).toFixed(3))
   const hayProblema = effectiveValue > 0 && estado !== 'ok'
@@ -107,11 +108,11 @@ export default function WeightModal({
               <p className="font-semibold">
                 {estado === 'sin_stock'
                   ? '⚠ Sin inventario registrado'
-                  : `⚠ Solo hay ${(stockDisponible ?? 0).toFixed(3)} kg`}
+                  : `⚠ Solo hay ${(stockDisponible ?? 0).toFixed(decimales(product.unidad, true))} ${etiquetaInventario(product.unidad, stockDisponible ?? 0)}`}
               </p>
               <p className="text-xs mt-0.5">
                 {puedeForzar
-                  ? `Si continúas, el inventario quedará en −${faltanKg.toFixed(3)} kg. Registra la entrada que falta para que el corte cuadre.`
+                  ? `Si continúas, el inventario quedará en −${faltanKg.toFixed(decimales(product.unidad, true))} ${etiquetaInventario(product.unidad, faltanKg)}. Registra la entrada que falta para que el corte cuadre.`
                   : 'Pídele al encargado que registre la entrada de mercancía antes de vender.'}
               </p>
             </div>
