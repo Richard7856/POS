@@ -13,6 +13,7 @@ import CuentasBar from '@/components/CuentasBar'
 import { useCuentas } from '@/hooks/useCuentas'
 import { POSSkeleton } from '@/components/Skeleton'
 import { getProductsCache, saveProductsCache } from '@/lib/productCache'
+import { stockDeLotes, aKg, usaInventario } from '@/lib/stock'
 
 export default function POSPage() {
   const { profile } = useAuth()
@@ -30,6 +31,9 @@ export default function POSPage() {
     abrirCuenta, cerrarCuenta, cambiarACuenta, renombrarCuenta,
     vaciarCuentaActiva, puedeAbrirMas,
   } = useCuentas()
+  // Stock disponible por producto (kg). Sirve para marcar agotados y avisar
+  // antes de que la venta descuadre el inventario.
+  const [stockMap, setStockMap] = useState<Map<string, number>>(new Map())
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [showCheckout, setShowCheckout] = useState(false)
   const [showMobileCart, setShowMobileCart] = useState(false)
@@ -44,6 +48,25 @@ export default function POSPage() {
   // Load active promotions for this branch
   const { applyDescuento, getComboNotifications, getComboDescuentoForProduct, getPromoBadge } =
     usePromociones(profile?.sucursal_id)
+
+  // Suma de lotes por producto de esta sucursal. Incluye los negativos a
+  // propósito: si el inventario ya está en rojo, el cajero debe verlo.
+  const loadStock = useCallback(async () => {
+    if (!profile?.sucursal_id) return
+    const { data } = await supabase
+      .from('lotes')
+      .select('product_id, cantidad_disponible')
+      .eq('sucursal_id', profile.sucursal_id)
+    const porProducto = new Map<string, { cantidad_disponible: number }[]>()
+    for (const l of data ?? []) {
+      const arr = porProducto.get(l.product_id) ?? []
+      arr.push(l)
+      porProducto.set(l.product_id, arr)
+    }
+    setStockMap(new Map([...porProducto].map(([id, lotes]) => [id, stockDeLotes(lotes)])))
+  }, [profile?.sucursal_id])
+
+  useEffect(() => { loadStock() }, [loadStock])
 
   useEffect(() => {
     async function loadProducts() {
@@ -161,6 +184,32 @@ export default function POSPage() {
   const clearCart = vaciarCuentaActiva
 
   const cartTotal = cart.reduce((sum, i) => sum + i.subtotal, 0)
+
+  // El cajero no puede decidir vender inventario que no existe: eso descuadra
+  // el corte. El staff sí puede (a veces la mercancía llegó y no se capturó),
+  // pero se le avisa y el faltante queda registrado en negativo.
+  const puedeForzarStock = profile?.rol === 'admin' || profile?.rol === 'encargado'
+
+  /**
+   * Stock que le queda a un producto descontando lo que YA está apartado en
+   * todas las cuentas abiertas — si no, dos cuentas podrían llevarse los
+   * mismos kilos y el descuadre aparecería hasta el cobro.
+   */
+  const stockLibre = useCallback((productId: string): number | null => {
+    // Sin ninguna entrada registrada el producto no está bajo control de
+    // inventario: se vende sin frenar. El control arranca solo en cuanto el
+    // encargado captura su primera entrada.
+    const registrado = stockMap.get(productId)
+    if (registrado === undefined) return null
+
+    const enCuentas = cuentas.reduce(
+      (s, c) => s + c.cart
+        .filter((i) => i.product.id === productId)
+        .reduce((k, i) => k + aKg(i.cantidad, i.product.unidad), 0),
+      0,
+    )
+    return parseFloat((registrado - enCuentas).toFixed(6))
+  }, [cuentas, stockMap])
 
   const handleProductTap = (product: Product) => {
     if (product.unidad === 'pieza') {
@@ -383,9 +432,15 @@ export default function POSPage() {
             <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {filtered.map((product) => {
                 const badge = getPromoBadge(product)
+                const libre   = usaInventario(product.unidad) ? stockLibre(product.id) : null
+                const agotado = libre !== null && libre <= 0
                 return (
                   <button key={product.id} onClick={() => handleProductTap(product)}
-                    className="relative bg-white rounded-xl p-4 shadow-sm border border-gray-200 hover:border-green-400 hover:shadow-md active:scale-95 transition-all text-left">
+                    className={`relative bg-white rounded-xl p-4 shadow-sm border active:scale-95 transition-all text-left ${
+                      agotado
+                        ? 'border-red-200 bg-red-50/40 hover:border-red-300'
+                        : 'border-gray-200 hover:border-green-400 hover:shadow-md'
+                    }`}>
                     {/* Promo badge */}
                     {badge && (
                       <span className="absolute top-2 right-2 bg-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
@@ -398,7 +453,16 @@ export default function POSPage() {
                     <div className="text-green-700 font-bold">
                       ${product.precio_por_unidad.toFixed(2)}
                     </div>
-                    <div className="text-xs text-gray-400 mt-0.5">/{product.unidad}</div>
+                    <div className="text-xs text-gray-400 mt-0.5 flex items-center justify-between gap-1">
+                      <span>/{product.unidad}</span>
+                      {libre !== null && (
+                        <span className={`tabular-nums font-medium ${
+                          libre <= 0 ? 'text-red-600' : libre < 1 ? 'text-amber-600' : 'text-gray-400'
+                        }`}>
+                          {libre <= 0 ? (libre < 0 ? `${libre.toFixed(1)} kg` : 'Agotado') : `${libre.toFixed(1)} kg`}
+                        </span>
+                      )}
+                    </div>
                   </button>
                 )
               })}
@@ -456,6 +520,8 @@ export default function POSPage() {
       {/* Weight modal */}
       {selectedProduct && (
         <WeightModal product={selectedProduct} scale={scale}
+          stockDisponible={usaInventario(selectedProduct.unidad) ? stockLibre(selectedProduct.id) : null}
+          puedeForzar={puedeForzarStock}
           onConfirm={(cantidad) => { addToCart(selectedProduct, cantidad); setSelectedProduct(null) }}
           onClose={() => setSelectedProduct(null)}
         />
@@ -464,12 +530,14 @@ export default function POSPage() {
       {/* Checkout modal */}
       {showCheckout && (
         <CheckoutModal cart={cart} total={cartTotal}
-          onConfirm={() => {
-            // Cobrada = atendida: la cuenta se cierra y el POS salta a la
-            // siguiente abierta (o abre una vacía si era la única).
+          onVentaGuardada={() => {
+            // Cobrada = atendida: la cuenta se cierra en cuanto la venta quedó
+            // guardada (no al descartar el ticket), y el POS salta a la
+            // siguiente abierta o abre una vacía si era la única.
             cerrarCuenta(activaId)
-            setShowCheckout(false)
+            loadStock()   // el cobro descontó lotes: refrescar lo disponible
           }}
+          onConfirm={() => setShowCheckout(false)}
           onClose={() => setShowCheckout(false)}
         />
       )}

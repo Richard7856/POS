@@ -10,8 +10,13 @@
  *   - Split (pago mixto): 3 amount inputs, metodo_pago = 'mixto',
  *     individual amounts stored in venta_pagos table
  *
- * After a successful payment, shows the ticket receipt (step 2) before
- * calling onConfirm() to clear the cart.
+ * Momentos importantes:
+ *   onVentaGuardada() — en cuanto la venta quedó en la base. La cuenta se
+ *     cierra AQUÍ, no al descartar el ticket: si el cajero cerrara la pestaña
+ *     con el ticket abierto, el carrito (que ahora se persiste) seguiría vivo
+ *     y podría cobrarse dos veces. El ticket se pinta de una copia
+ *     (completedSale), así que vaciar el carrito no lo afecta.
+ *   onConfirm() — el cajero descartó el ticket; sólo cierra el modal.
  */
 
 import { useState } from 'react'
@@ -19,6 +24,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { CartItem } from '@/lib/types'
 import { costoPonderadoKg, costoKgAUnidad } from '@/lib/ganancia'
+import { planFifo, aKg, usaInventario } from '@/lib/stock'
 import TicketReceipt from '@/components/TicketReceipt'
 
 type MetodoPago = 'efectivo' | 'tarjeta' | 'transferencia'
@@ -32,6 +38,9 @@ const METODOS: { value: MetodoPago; label: string; icon: string }[] = [
 interface Props {
   cart: CartItem[]
   total: number
+  /** La venta ya quedó guardada: cerrar la cuenta y refrescar inventario */
+  onVentaGuardada: () => void
+  /** El ticket se descartó */
   onConfirm: () => void
   onClose: () => void
 }
@@ -57,7 +66,9 @@ export interface CompletedSale {
   fecha: Date
 }
 
-export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props) {
+export default function CheckoutModal({
+  cart, total, onVentaGuardada, onConfirm, onClose,
+}: Props) {
   const { user, profile } = useAuth()
 
   // ── Step state ─────────────────────────────────────────────────────────────
@@ -102,38 +113,37 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
   const resolveFifoLotes = async (
     productId: string,
     cantidadKg: number,
-  ): Promise<{ primaryLoteId: string | null; loteUpdates: LoteUpdate[]; costoPorKg: number | null }> => {
-    if (!profile?.sucursal_id) return { primaryLoteId: null, loteUpdates: [], costoPorKg: null }
+  ): Promise<{
+    primaryLoteId: string | null
+    loteUpdates: LoteUpdate[]
+    costoPorKg: number | null
+    faltante: number
+  }> => {
+    if (!profile?.sucursal_id) {
+      return { primaryLoteId: null, loteUpdates: [], costoPorKg: null, faltante: cantidadKg }
+    }
 
+    // Se traen TODOS los lotes (incluidos los que ya están en 0 o negativos):
+    // planFifo consume los positivos y carga el faltante al más reciente, para
+    // que el hueco quede visible en lugar de desaparecer.
     const { data: lotes } = await supabase
       .from('lotes')
       .select('id, cantidad_disponible, costo_por_unidad')
       .eq('product_id', productId)
       .eq('sucursal_id', profile.sucursal_id)
-      .gt('cantidad_disponible', 0)
       .order('fecha_entrada', { ascending: true })
 
-    if (!lotes || lotes.length === 0) return { primaryLoteId: null, loteUpdates: [], costoPorKg: null }
+    const plan = planFifo(lotes ?? [], cantidadKg)
 
-    const loteUpdates: LoteUpdate[] = []
-    // [kg tomados del lote, costo/kg de ese lote] — para el costo ponderado
-    const porciones: [number, number | null][] = []
-    let remaining = cantidadKg
-    let primaryLoteId: string | null = null
-
-    for (const lote of lotes) {
-      if (remaining <= 0) break
-      if (!primaryLoteId) primaryLoteId = lote.id
-      const deducted = Math.min(lote.cantidad_disponible, remaining)
-      loteUpdates.push({
-        lote_id: lote.id,
-        new_cantidad_disponible: parseFloat((lote.cantidad_disponible - deducted).toFixed(6)),
-      })
-      porciones.push([deducted, lote.costo_por_unidad])
-      remaining -= deducted
+    return {
+      primaryLoteId: plan.primaryLoteId,
+      loteUpdates: plan.updates.map((u) => ({
+        lote_id: u.lote_id,
+        new_cantidad_disponible: u.nueva,
+      })),
+      costoPorKg: costoPonderadoKg(plan.porciones),
+      faltante: plan.faltante,
     }
-
-    return { primaryLoteId, loteUpdates, costoPorKg: costoPonderadoKg(porciones) }
   }
 
   // ── Handle payment ─────────────────────────────────────────────────────────
@@ -192,10 +202,8 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
           let costo_unitario: number | null =
             item.product.precio_compra ?? null
 
-          if (item.product.unidad === 'kg' || item.product.unidad === 'g') {
-            const cantidadKg = item.product.unidad === 'g'
-              ? item.cantidad / 1000
-              : item.cantidad
+          if (usaInventario(item.product.unidad)) {
+            const cantidadKg = aKg(item.cantidad, item.product.unidad)
             const { primaryLoteId, loteUpdates, costoPorKg } = await resolveFifoLotes(
               item.product.id, cantidadKg,
             )
@@ -256,6 +264,9 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
         fecha:          new Date(),
       })
       setStep('ticket')
+      // La venta ya está en la base: liberar la cuenta de inmediato para que
+      // no exista un carrito cobrado que se pueda volver a cobrar.
+      onVentaGuardada()
 
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error desconocido')

@@ -227,7 +227,9 @@ function LotesPageInner() {
   const stockActual = (() => {
     const map = new Map<string, { nombre: string; kg: number; valor: number; costoCompleto: boolean }>()
     for (const l of lotes) {
-      if (l.cantidad_disponible <= 0) continue
+      // Los lotes en 0 no aportan, pero los NEGATIVOS sí: son el faltante que
+      // hay que capturar, y esconderlo sería tapar el descuadre.
+      if (l.cantidad_disponible === 0) continue
       const prev = map.get(l.product_id) ?? {
         nombre: l.product?.nombre ?? '—', kg: 0, valor: 0, costoCompleto: true,
       }
@@ -389,6 +391,20 @@ function LotesPageInner() {
         </form>
       )}
 
+      {/* Faltantes: productos que se vendieron sin haber capturado la entrada */}
+      {stockActual.some((s) => s.kg < 0) && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4">
+          <p className="text-sm font-semibold text-red-800">
+            ⚠ Hay productos con inventario en negativo
+          </p>
+          <p className="text-xs text-red-600 mt-0.5">
+            Se vendió más de lo que se capturó:{' '}
+            {stockActual.filter((s) => s.kg < 0).map((s) => `${s.nombre} (${s.kg.toFixed(1)} kg)`).join(', ')}.
+            Registra la entrada que falta para que el inventario y el corte cuadren.
+          </p>
+        </div>
+      )}
+
       {/* ── Stock actual: lo que hay disponible hoy, venga del lote que venga ── */}
       {stockActual.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6 overflow-hidden">
@@ -404,7 +420,7 @@ function LotesPageInner() {
             {stockActual.map((s) => (
               <div key={s.id} className="bg-white px-4 py-3 flex flex-col">
                 <span className="text-xs text-gray-500 truncate">{s.nombre}</span>
-                <span className="text-base font-bold text-gray-800 tabular-nums">
+                <span className={`text-base font-bold tabular-nums ${s.kg < 0 ? 'text-red-600' : 'text-gray-800'}`}>
                   {s.kg.toFixed(1)} <span className="text-xs font-normal text-gray-400">kg</span>
                 </span>
                 {canWrite && s.valor > 0 && (
@@ -456,10 +472,12 @@ function LotesPageInner() {
                 const pct = lote.cantidad_inicial > 0
                   ? (lote.cantidad_disponible / lote.cantidad_inicial) * 100
                   : 0
-                const agotado = lote.cantidad_disponible <= 0
+                const agotado  = lote.cantidad_disponible === 0
+                // Negativo = se vendió más de lo que se capturó de entrada
+                const faltante = lote.cantidad_disponible < 0
                 return (
                   <React.Fragment key={lote.id}>
-                  <tr className={agotado ? 'opacity-40' : ''}>
+                  <tr className={faltante ? 'bg-red-50' : agotado ? 'opacity-40' : ''}>
                     <td className="px-4 py-3 font-medium text-gray-800">
                       {lote.product?.nombre ?? '—'}
                     </td>
@@ -467,13 +485,13 @@ function LotesPageInner() {
                       {lote.cantidad_inicial.toFixed(3)} kg
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={pct < 20 ? 'text-red-600 font-bold' : 'text-gray-800'}>
+                      <span className={faltante ? 'text-red-700 font-bold' : pct < 20 ? 'text-red-600 font-bold' : 'text-gray-800'}>
                         {lote.cantidad_disponible.toFixed(3)} kg
                       </span>
                       <div className="w-16 h-1.5 bg-gray-100 rounded-full ml-auto mt-1">
                         <div
-                          className={`h-1.5 rounded-full ${pct < 20 ? 'bg-red-400' : pct < 50 ? 'bg-yellow-400' : 'bg-green-500'}`}
-                          style={{ width: `${Math.max(pct, 0)}%` }}
+                          className={`h-1.5 rounded-full ${faltante ? 'bg-red-600' : pct < 20 ? 'bg-red-400' : pct < 50 ? 'bg-yellow-400' : 'bg-green-500'}`}
+                          style={{ width: faltante ? '100%' : `${Math.max(pct, 0)}%` }}
                         />
                       </div>
                     </td>
@@ -484,10 +502,15 @@ function LotesPageInner() {
                       {lote.proveedor ?? '—'}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        agotado ? 'bg-gray-100 text-gray-400' : pct < 20 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
-                      }`}>
-                        {agotado ? 'Agotado' : pct < 20 ? 'Poco' : 'OK'}
+                      <span
+                        title={faltante ? 'Se vendió más de lo capturado — registra la entrada que falta' : undefined}
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          faltante ? 'bg-red-600 text-white'
+                            : agotado ? 'bg-gray-100 text-gray-400'
+                            : pct < 20 ? 'bg-red-100 text-red-700'
+                            : 'bg-green-100 text-green-700'
+                        }`}>
+                        {faltante ? '⚠ Faltante' : agotado ? 'Agotado' : pct < 20 ? 'Poco' : 'OK'}
                       </span>
                     </td>
                     {/* Ajustar button — admin/encargado only */}

@@ -72,7 +72,6 @@ export default function InventarioPage() {
           .from('lotes')
           .select('product_id, cantidad_disponible')
           .in('product_id', prods.map((p) => p.id))
-          .gt('cantidad_disponible', 0)
         if (sucursalId) lotesQ = lotesQ.eq('sucursal_id', sucursalId)
         const { data: lotes } = await lotesQ
         const stock = new Map<string, number>()

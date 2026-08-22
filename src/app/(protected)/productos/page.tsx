@@ -78,10 +78,11 @@ export default function ProductosPage() {
         .select('*')
         .order('categoria', { ascending: true })
         .order('nombre', { ascending: true }),
+      // Sin filtro de > 0: un lote en negativo significa que se vendió más de
+      // lo que entró, y eso tiene que verse en el catálogo.
       supabase
         .from('lotes')
-        .select('product_id, cantidad_disponible')
-        .gt('cantidad_disponible', 0),
+        .select('product_id, cantidad_disponible'),
     ])
 
     if (data) {
@@ -524,15 +525,21 @@ export default function ProductosPage() {
                   {product.unidad === 'pieza' ? (
                     <span className="text-gray-300">—</span>
                   ) : (() => {
-                    const stock = stockMap.get(product.id) ?? 0
+                    const stock = stockMap.get(product.id)
+                    // Sin entradas capturadas no es lo mismo que estar en cero:
+                    // ese producto todavía no lleva control de inventario.
+                    if (stock === undefined) {
+                      return <span className="text-gray-300" title="Sin entradas registradas">sin registro</span>
+                    }
                     const bajo = product.stock_minimo != null && stock < product.stock_minimo
                     return (
                       <span className={
-                        stock <= 0 ? 'text-red-600 font-bold'
+                        stock < 0 ? 'text-red-600 font-bold'
+                          : stock === 0 ? 'text-gray-400'
                           : bajo ? 'text-amber-600 font-semibold'
                           : 'text-gray-600'
                       }>
-                        {stock.toFixed(1)} kg{bajo && stock > 0 ? ' ⚠' : stock <= 0 ? ' ∅' : ''}
+                        {stock.toFixed(1)} kg{stock < 0 || (bajo && stock > 0) ? ' ⚠' : ''}
                       </span>
                     )
                   })()}

@@ -149,6 +149,26 @@ solo y cada registro muestra el dinero perdido al costo del lote.
 Entradas, merma, pedido y corte operan por sucursal: un perfil sin sucursal
 asignada ve un aviso claro (antes fallaban en silencio con pantallas vacías).
 
+## Control de existencias al vender
+
+El POS muestra en cada tarjeta los kg disponibles (descontando lo ya apartado
+en las cuentas abiertas) y marca los agotados en rojo. Al pesar:
+
+- **Cajero**: no puede agregar más de lo que hay — el botón se bloquea y se le
+  pide avisar al encargado.
+- **Admin/encargado**: puede continuar (a veces la mercancía llegó y no se ha
+  capturado), pero se le advierte en cuánto quedará el inventario negativo.
+
+El control aplica solo a productos **con entradas registradas**. Un producto sin
+ninguna entrada capturada todavía no lleva inventario y se vende sin frenos; el
+control arranca solo el día que se le registra su primera entrada. Los productos
+por pieza no llevan lotes, así que tampoco se controlan.
+
+Cuando se vende de más, el faltante **se registra**: el lote más reciente queda
+en negativo (antes esos kilos simplemente desaparecían y el lote se quedaba en
+0). Ese negativo se ve en el POS, en el catálogo y en Entradas con la etiqueta
+⚠ Faltante — es la señal de "aquí falta capturar una entrada".
+
 ## Modo offline
 
 `productCache` guarda el catálogo y `offlineQueue` encola escrituras de

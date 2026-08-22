@@ -79,7 +79,6 @@ export default function PedidoPage() {
       .from('lotes')
       .select('product_id, cantidad_disponible')
       .in('product_id', productIds)
-      .gt('cantidad_disponible', 0)
 
     if (!isAdmin && profile.sucursal_id) {
       lotesQuery = lotesQuery.eq('sucursal_id', profile.sucursal_id)
@@ -119,7 +118,7 @@ export default function PedidoPage() {
         stock_actual: parseFloat(stockActual.toFixed(3)),
         faltante,
         costo_estimado: costoKg != null ? parseFloat((faltante * costoKg).toFixed(2)) : null,
-        urgencia:    stockActual === 0 ? 'agotado' : pct < 0.25 ? 'critico' : 'bajo',
+        urgencia:    stockActual <= 0 ? 'agotado' : pct < 0.25 ? 'critico' : 'bajo',
       })
     }
 

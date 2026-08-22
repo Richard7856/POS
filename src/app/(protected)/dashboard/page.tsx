@@ -162,7 +162,6 @@ export default function DashboardPage() {
     let lotesMinQ = supabase
       .from('lotes')
       .select('product_id, cantidad_disponible')
-      .gt('cantidad_disponible', 0)
     if (pids.length > 0) lotesMinQ = lotesMinQ.in('product_id', pids)
     if (!isAdmin && profile.sucursal_id) lotesMinQ = lotesMinQ.eq('sucursal_id', profile.sucursal_id)
 

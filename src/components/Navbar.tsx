@@ -74,7 +74,6 @@ export default function Navbar() {
         .from('lotes')
         .select('product_id, cantidad_disponible')
         .in('product_id', prods.map((p) => p.id))
-        .gt('cantidad_disponible', 0)
 
       if (profile?.rol !== 'admin' && profile?.sucursal_id) {
         q = q.eq('sucursal_id', profile.sucursal_id)

@@ -3,16 +3,27 @@
 import { useState } from 'react'
 import { Product } from '@/lib/types'
 import type { ScaleHookReturn } from '@/hooks/useBluetoothScale'
+import { evaluarStock, aKg } from '@/lib/stock'
 
 interface Props {
   product: Product
   scale: ScaleHookReturn
+  /**
+   * kg disponibles, ya descontando lo apartado en las cuentas abiertas.
+   * null = el producto no lleva control de inventario (por pieza, o sin
+   * ninguna entrada capturada todavía): no se avisa nada.
+   */
+  stockDisponible: number | null
+  /** admin/encargado pueden vender aunque no haya inventario; el cajero no */
+  puedeForzar: boolean
   // cantidad is in the product's native unit (kg for 'kg' products, g for 'g' products)
   onConfirm: (cantidad: number) => void
   onClose: () => void
 }
 
-export default function WeightModal({ product, scale, onConfirm, onClose }: Props) {
+export default function WeightModal({
+  product, scale, stockDisponible, puedeForzar, onConfirm, onClose,
+}: Props) {
   const [manualInput, setManualInput] = useState('')
 
   const isConnected = scale.status === 'connected'
@@ -30,7 +41,15 @@ export default function WeightModal({ product, scale, onConfirm, onClose }: Prop
     : 0
 
   const subtotal = effectiveValue * product.precio_por_unidad
-  const canConfirm = effectiveValue > 0
+
+  // ── Control de existencias ────────────────────────────────────────────────
+  // El inventario se lleva en kg aunque el producto se venda por gramo.
+  const pedidoKg = aKg(effectiveValue, product.unidad)
+  const estado   = evaluarStock(stockDisponible, pedidoKg)
+  const faltanKg = parseFloat((pedidoKg - (stockDisponible ?? 0)).toFixed(3))
+  const hayProblema = effectiveValue > 0 && estado !== 'ok'
+  // El cajero queda bloqueado; el staff confirma sabiendo que quedará negativo.
+  const canConfirm = effectiveValue > 0 && (!hayProblema || puedeForzar)
 
   const step = product.unidad === 'g' ? '1' : '0.001'
   const unitLabel = product.unidad === 'g' ? 'g' : 'kg'
@@ -78,6 +97,26 @@ export default function WeightModal({ product, scale, onConfirm, onClose }: Prop
             </div>
           </div>
 
+          {/* Aviso de existencias — antes del subtotal, para que se lea primero */}
+          {hayProblema && (
+            <div className={`rounded-xl px-4 py-3 mb-4 text-sm border ${
+              puedeForzar
+                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}>
+              <p className="font-semibold">
+                {estado === 'sin_stock'
+                  ? '⚠ Sin inventario registrado'
+                  : `⚠ Solo hay ${(stockDisponible ?? 0).toFixed(3)} kg`}
+              </p>
+              <p className="text-xs mt-0.5">
+                {puedeForzar
+                  ? `Si continúas, el inventario quedará en −${faltanKg.toFixed(3)} kg. Registra la entrada que falta para que el corte cuadre.`
+                  : 'Pídele al encargado que registre la entrada de mercancía antes de vender.'}
+              </p>
+            </div>
+          )}
+
           {/* Subtotal summary */}
           <div className="flex justify-between items-center bg-green-50 border border-green-100 rounded-xl px-4 py-3 mb-6">
             <div>
@@ -106,7 +145,7 @@ export default function WeightModal({ product, scale, onConfirm, onClose }: Prop
               disabled={!canConfirm}
               className="flex-1 py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all"
             >
-              Agregar →
+              {hayProblema && puedeForzar ? 'Agregar de todos modos' : 'Agregar →'}
             </button>
           </div>
         </div>
