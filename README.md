@@ -41,6 +41,7 @@ migración nueva, para poder reconstruir el proyecto desde cero.
 20260822190100_rls.sql               políticas por rol y sucursal
 20260822190200_storage_merma_fotos.sql  bucket de evidencia de merma
 20260822190300_private_helpers.sql   helpers de RLS fuera del esquema expuesto
+20260822190400_productos_solo_staff.sql  el catálogo lo edita solo admin/encargado
 ```
 
 Aplicarlas a un proyecto nuevo:
@@ -49,19 +50,36 @@ Aplicarlas a un proyecto nuevo:
 supabase link --project-ref <ref>
 supabase db push
 supabase functions deploy create-user
+supabase functions deploy reset-password
 ```
 
 ### Roles
 
-| Rol | Alcance |
-|---|---|
-| `admin` | todas las sucursales; usuarios, sucursales, promociones, ventas |
-| `encargado` | solo su sucursal; inventario, cortes, promos, devoluciones, descuentos |
-| `cajero` | solo su sucursal; vende, registra merma y gastos de caja |
+Tres roles, con el alcance limitado a la sucursal del perfil salvo `admin`:
 
-El primer admin se crea a mano en la BD; a partir de ahí se dan de alta desde
-`/admin/usuarios`, que llama a la Edge Function `create-user` (necesita el
-service role, por eso no se hace desde el navegador).
+| Rol | Qué hace |
+|---|---|
+| `admin` | Todo, en todas las sucursales: productos, usuarios, sucursales, promociones y reportes. |
+| `encargado` | Registra la mercancía que entra (lotes), cierra la caja, hace devoluciones y descuentos, y también cobra. Alta y edición de productos. |
+| `cajero` | Cobra en el POS e imprime el ticket. Registra merma y gastos de caja. **Consulta el catálogo pero no lo modifica, y no ve el precio de compra.** |
+
+Las políticas RLS son las que hacen valer esto, no la UI: un cajero con el token
+en la mano tampoco puede insertar productos, abrir un corte ni vender a nombre de
+otra sucursal.
+
+### Usuarios y contraseñas
+
+El primer admin se crea a mano en la BD. A partir de ahí:
+
+- **Alta**: `/admin/usuarios` → Edge Function `create-user`. El admin define una
+  contraseña temporal.
+- **Cambio propio**: cualquiera entra a `/perfil` (👤 en la barra) y cambia su
+  contraseña. No requiere service role.
+- **Reseteo por el admin**: `/admin/usuarios` → botón *Contraseña* → Edge
+  Function `reset-password`. Para cuando alguien la olvidó.
+
+Ambas Edge Functions validan que quien llama sea `admin` antes de usar el
+service role.
 
 ## Pantallas
 
@@ -75,6 +93,7 @@ service role, por eso no se hace desde el navegador).
 | `/inventario`, `/inventario/lotes`, `/inventario/pedido` | lotes FIFO, alertas, pedido sugerido | staff |
 | `/historial/corte` | corte de caja | staff |
 | `/admin/*` | usuarios, sucursales, promociones | admin |
+| `/perfil` | datos de la cuenta y cambio de contraseña | todos |
 
 ## Notas de hardware
 

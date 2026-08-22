@@ -30,7 +30,12 @@ const EMPTY_FORM = {
 
 export default function ProductosPage() {
   const { profile } = useAuth()
-  const canSeeCost = profile?.rol === 'admin' || profile?.rol === 'encargado'
+  // admin y encargado son "staff": son los únicos que ven el costo de compra y
+  // los únicos que dan de alta o modifican productos. El cajero ve el catálogo
+  // en modo lectura — la barrera real está en las políticas RLS de la tabla.
+  const isStaff    = profile?.rol === 'admin' || profile?.rol === 'encargado'
+  const canSeeCost = isStaff
+  const canEdit    = isStaff
 
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
@@ -97,6 +102,7 @@ export default function ProductosPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canEdit) return   // el cajero no captura catálogo; RLS lo rechazaría igual
     setSaving(true)
 
     const payload: Partial<Product> = {
@@ -180,6 +186,7 @@ export default function ProductosPage() {
   }
 
   const handleToggleActive = async (product: Product) => {
+    if (!canEdit) return
     const newActivo = !product.activo
     if (navigator.onLine) {
       await supabase.from('products').update({ activo: newActivo }).eq('id', product.id)
@@ -224,16 +231,18 @@ export default function ProductosPage() {
             </p>
           )}
         </div>
-        <button
-          onClick={() => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true) }}
-          className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
-        >
-          + Nuevo producto
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true) }}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+          >
+            + Nuevo producto
+          </button>
+        )}
       </div>
 
       {/* Add / Edit form */}
-      {showForm && (
+      {showForm && canEdit && (
         <form
           onSubmit={handleSubmit}
           className="bg-white rounded-xl border border-gray-200 p-5 mb-6 shadow-sm space-y-4"
@@ -406,7 +415,7 @@ export default function ProductosPage() {
                 <th className="text-right px-4 py-3 text-gray-500 font-medium hidden md:table-cell">Stock mín.</th>
               )}
               <th className="text-left px-4 py-3 text-gray-500 font-medium">Estado</th>
-              <th className="px-4 py-3" />
+              {canEdit && <th className="px-4 py-3" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -436,16 +445,18 @@ export default function ProductosPage() {
                     {product.activo ? 'Activo' : 'Inactivo'}
                   </span>
                 </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-3 justify-end">
-                    <button onClick={() => handleEdit(product)} className="text-blue-500 hover:text-blue-700 text-xs">
-                      Editar
-                    </button>
-                    <button onClick={() => handleToggleActive(product)} className="text-gray-400 hover:text-gray-600 text-xs">
-                      {product.activo ? 'Desactivar' : 'Activar'}
-                    </button>
-                  </div>
-                </td>
+                {canEdit && (
+                  <td className="px-4 py-3">
+                    <div className="flex gap-3 justify-end">
+                      <button onClick={() => handleEdit(product)} className="text-blue-500 hover:text-blue-700 text-xs">
+                        Editar
+                      </button>
+                      <button onClick={() => handleToggleActive(product)} className="text-gray-400 hover:text-gray-600 text-xs">
+                        {product.activo ? 'Desactivar' : 'Activar'}
+                      </button>
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

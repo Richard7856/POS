@@ -14,6 +14,16 @@ const ROL_COLORS: Record<Rol, string> = {
   cajero:  'bg-green-100 text-green-700',
 }
 
+// Qué puede hacer cada rol. Se muestra al dar de alta para no tener que
+// adivinar cuál asignar.
+const ROL_DESC: Record<Rol, string> = {
+  admin:     'Todo: productos, usuarios, sucursales, promociones y reportes.',
+  encargado: 'Registra la mercancía que entra, cierra la caja, hace devoluciones y también cobra.',
+  cajero:    'Solo cobra en el POS e imprime el ticket. Registra merma y gastos de caja.',
+}
+
+const MIN_PASSWORD = 8
+
 const EMPTY_FORM = {
   email: '',
   password: '',
@@ -33,6 +43,12 @@ export default function UsuariosPage() {
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+
+  // Reseteo de contraseña: id del usuario en edición + campo y mensajes
+  const [resetFor,   setResetFor]   = useState<string | null>(null)
+  const [resetPass,  setResetPass]  = useState('')
+  const [resetSaving, setResetSaving] = useState(false)
+  const [resetMsg,   setResetMsg]   = useState<{ id: string; text: string; ok: boolean } | null>(null)
 
   useEffect(() => {
     if (!loading && profile?.rol !== 'admin') router.replace('/admin')
@@ -93,6 +109,38 @@ export default function UsuariosPage() {
     load()
   }
 
+  // Resetear la contraseña de otra persona necesita el service role, así que va
+  // por Edge Function (valida que quien llama sea admin). Cambiar la propia se
+  // hace en /perfil sin pasar por aquí.
+  const handleResetPassword = async (userId: string) => {
+    if (resetPass.length < MIN_PASSWORD) {
+      setResetMsg({ id: userId, text: `Mínimo ${MIN_PASSWORD} caracteres.`, ok: false })
+      return
+    }
+    setResetSaving(true)
+    setResetMsg(null)
+
+    try {
+      const { data, error } = await supabase.functions.invoke('reset-password', {
+        body: { user_id: userId, password: resetPass },
+      })
+      if (error || data?.error) {
+        throw new Error(error?.message ?? data?.error ?? 'Error al resetear la contraseña')
+      }
+      setResetMsg({ id: userId, text: '✓ Contraseña actualizada. Entrégasela y pídele que la cambie en Mi cuenta.', ok: true })
+      setResetPass('')
+      setResetFor(null)
+    } catch (err: unknown) {
+      setResetMsg({
+        id: userId,
+        text: err instanceof Error ? err.message : 'Error desconocido',
+        ok: false,
+      })
+    } finally {
+      setResetSaving(false)
+    }
+  }
+
   if (loadingData) return <div className="p-8 text-gray-400">Cargando...</div>
 
   return (
@@ -113,7 +161,8 @@ export default function UsuariosPage() {
         <form onSubmit={handleCreate} className="bg-white rounded-xl border border-gray-200 p-5 mb-6 shadow-sm space-y-4">
           <h2 className="font-semibold text-gray-700">Nuevo usuario</h2>
           <p className="text-xs text-gray-400">
-            Se crea una cuenta de acceso al POS. El usuario puede cambiar su contraseña desde la configuración de Supabase.
+            Se crea una cuenta de acceso al POS. Dale la contraseña temporal y pídele que la
+            cambie desde <span className="font-medium">Mi cuenta</span> al entrar.
           </p>
 
           <div className="grid grid-cols-2 gap-4">
@@ -148,6 +197,7 @@ export default function UsuariosPage() {
                 <option value="encargado">Encargado</option>
                 <option value="admin">Admin</option>
               </select>
+              <p className="text-xs text-gray-400 mt-1">{ROL_DESC[form.rol]}</p>
             </div>
             <div>
               <label className="block text-sm text-gray-600 mb-1">Sucursal</label>
@@ -179,7 +229,8 @@ export default function UsuariosPage() {
 
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100 shadow-sm">
         {users.map((u) => (
-          <div key={u.id} className={`flex items-center gap-3 px-4 py-3 ${u.activo ? '' : 'opacity-50'}`}>
+          <div key={u.id} className={u.activo ? '' : 'opacity-50'}>
+          <div className="flex items-center gap-3 px-4 py-3">
             <div className="flex-1 min-w-0">
               <p className="font-medium text-gray-800 truncate">{u.nombre ?? '(sin nombre)'}</p>
               <p className="text-xs text-gray-400 truncate">{(u as Profile & { sucursal?: { nombre: string } }).sucursal?.nombre ?? 'Sin sucursal'}</p>
@@ -194,10 +245,53 @@ export default function UsuariosPage() {
               <option value="encargado">encargado</option>
               <option value="admin">admin</option>
             </select>
+            <button
+              onClick={() => {
+                setResetFor(resetFor === u.id ? null : u.id)
+                setResetPass('')
+                setResetMsg(null)
+              }}
+              className="text-gray-400 hover:text-gray-600 text-xs"
+              title="Asignar una contraseña temporal"
+            >
+              Contraseña
+            </button>
             <button onClick={() => handleToggleActive(u)} className="text-gray-400 hover:text-gray-600 text-xs">
               {u.activo ? 'Desactivar' : 'Activar'}
             </button>
           </div>
+
+          {/* Reseteo de contraseña de esta persona */}
+          {resetFor === u.id && (
+            <div className="px-4 pb-3 -mt-1 flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={resetPass}
+                minLength={MIN_PASSWORD}
+                onChange={(e) => setResetPass(e.target.value)}
+                placeholder={`Nueva contraseña temporal (mín. ${MIN_PASSWORD})`}
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <button
+                onClick={() => handleResetPassword(u.id)}
+                disabled={resetSaving}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+              >
+                {resetSaving ? 'Guardando...' : 'Asignar'}
+              </button>
+            </div>
+          )}
+
+          {resetMsg?.id === u.id && (
+            <div className={`mx-4 mb-3 text-xs rounded-lg px-3 py-2 border ${
+              resetMsg.ok
+                ? 'bg-green-50 border-green-200 text-green-700'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}>
+              {resetMsg.text}
+            </div>
+          )}
+        </div>
         ))}
       </div>
     </div>

@@ -158,10 +158,26 @@ export default function Navbar() {
                 {profile.rol}
               </span>
             )}
-            {/* User name — md+ only */}
-            <span className="hidden md:inline text-sm text-green-100 truncate max-w-[120px]">
+            {/* User name — md+ only. Lleva a /perfil (cambio de contraseña) */}
+            <Link
+              href="/perfil"
+              title="Mi cuenta"
+              className="hidden md:inline text-sm text-green-100 hover:text-white truncate max-w-[120px]"
+            >
               {profile?.nombre ?? user.email}
-            </span>
+            </Link>
+            {/* Mismo destino, visible en móvil donde el nombre se oculta */}
+            <Link
+              href="/perfil"
+              title="Mi cuenta"
+              className={`md:hidden rounded-md p-1.5 transition-colors text-lg leading-none ${
+                pathname === '/perfil'
+                  ? 'bg-green-900 text-white'
+                  : 'text-green-200 hover:text-white hover:bg-green-600'
+              }`}
+            >
+              👤
+            </Link>
             <button
               onClick={handleSignOut}
               title="Cerrar sesión"
