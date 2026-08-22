@@ -246,6 +246,6 @@ export interface Merma {
   registrado_por: string | null
   created_at: string
   // Joined
-  lote?: Pick<Lote, 'id' | 'fecha_entrada' | 'cantidad_inicial'>
+  lote?: Pick<Lote, 'id' | 'fecha_entrada' | 'cantidad_inicial' | 'costo_por_unidad'>
   product?: Pick<Product, 'id' | 'nombre' | 'unidad'>
 }

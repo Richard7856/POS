@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
+import SinSucursal from '@/components/SinSucursal'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,8 @@ export default function PedidoPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (authLoading || !profile) return null
+  // El pedido es por sucursal; admin sin sucursal ve el global, los demás no.
+  if (profile.rol !== 'admin' && !profile.sucursal_id) return <SinSucursal />
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto overflow-y-auto h-full">

@@ -139,6 +139,16 @@ El flujo del dinero se calcula solo, sin capturas extra:
 
 La aritmética vive en `lib/ganancia.ts` (funciones puras con pruebas).
 
+## El flujo del que reabastece (encargado)
+
+`/inventario` es su pantalla de inicio: las tarjetas traen el dato que decide
+si hay que entrar — kg registrados hoy, merma del mes en kg y pesos, y cuántos
+productos están bajo mínimo. En merma, el lote más viejo (FIFO) se preselecciona
+solo y cada registro muestra el dinero perdido al costo del lote.
+
+Entradas, merma, pedido y corte operan por sucursal: un perfil sin sucursal
+asignada ve un aviso claro (antes fallaban en silencio con pantallas vacías).
+
 ## Modo offline
 
 `productCache` guarda el catálogo y `offlineQueue` encola escrituras de

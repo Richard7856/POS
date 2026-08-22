@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { calcGanancia, costoKgAUnidad } from '@/lib/ganancia'
+import SinSucursal from '@/components/SinSucursal'
 import type { Lote, Product } from '@/lib/types'
 
 const EMPTY_FORM = {
@@ -241,6 +242,8 @@ function LotesPageInner() {
   })()
   const valorInventario = stockActual.reduce((s, x) => s + x.valor, 0)
 
+  // Sin sucursal no hay inventario que ver ni forma de registrar entradas.
+  if (profile && !profile.sucursal_id) return <SinSucursal />
   if (loading) return <div className="p-8 text-gray-400">Cargando...</div>
 
   return (

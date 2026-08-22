@@ -21,6 +21,7 @@ import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import type { Corte, MovimientoCaja } from '@/lib/types'
 import MovimientoCajaModal from '@/components/MovimientoCajaModal'
+import SinSucursal from '@/components/SinSucursal'
 import { CorteSkeleton } from '@/components/Skeleton'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -279,6 +280,9 @@ export default function CorteCajaPage() {
     }
   }
 
+  // El corte se guarda POR sucursal (constraint sucursal_id + fecha): sin
+  // sucursal asignada no hay forma de guardarlo.
+  if (profile && !profile.sucursal_id) return <SinSucursal />
   if (loading) return <CorteSkeleton />
 
   // ── Render ─────────────────────────────────────────────────────────────────

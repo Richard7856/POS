@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import type { Merma, Lote, Product, MotivoMerma } from '@/lib/types'
+import SinSucursal from '@/components/SinSucursal'
 
 const MOTIVOS: MotivoMerma[] = ['Podrido', 'Dañado', 'Caducado', 'Robo', 'Otro']
 
@@ -53,7 +54,7 @@ export default function MermaPage() {
     const [{ data: mermasData }, { data: productsData }] = await Promise.all([
       supabase
         .from('mermas')
-        .select('*, product:products(id, nombre, unidad), lote:lotes(id, fecha_entrada, cantidad_inicial)')
+        .select('*, product:products(id, nombre, unidad), lote:lotes(id, fecha_entrada, cantidad_inicial, costo_por_unidad)')
         .eq('sucursal_id', profile?.sucursal_id ?? '')
         .order('created_at', { ascending: false })
         .limit(100),
@@ -84,7 +85,15 @@ export default function MermaPage() {
       .eq('sucursal_id', profile.sucursal_id)
       .gt('cantidad_disponible', 0)
       .order('fecha_entrada', { ascending: true })
-      .then(({ data }) => setLotesByProduct(data ?? []))
+      .then(({ data }) => {
+        const lotes = data ?? []
+        setLotesByProduct(lotes)
+        // La merma casi siempre es del lote más viejo (FIFO: es el que se echa
+        // a perder). Se preselecciona y el cajero solo lo cambia si aplica.
+        if (lotes.length > 0) {
+          setForm((f) => (f.lote_id ? f : { ...f, lote_id: lotes[0].id }))
+        }
+      })
   }, [form.product_id, profile?.sucursal_id])
 
   // ── Photo handling ──────────────────────────────────────────────────────────
@@ -194,11 +203,18 @@ export default function MermaPage() {
     setSaving(false)
   }
 
-  // Summary: total kg wasted today and this week
+  // Summary: kg y pesos perdidos, hoy y en los últimos registros.
+  // El $ usa el costo del lote de cada merma; sin costo, esa merma no suma $.
   const today  = new Date().toISOString().slice(0, 10)
-  const kgHoy  = mermas.filter((m) => m.fecha === today).reduce((s, m) => s + m.cantidad, 0)
+  const hoy    = mermas.filter((m) => m.fecha === today)
+  const kgHoy  = hoy.reduce((s, m) => s + m.cantidad, 0)
   const kgTotal = mermas.reduce((s, m) => s + m.cantidad, 0)
+  const pesosDe = (ms: typeof mermas) =>
+    ms.reduce((s, m) => s + (m.lote?.costo_por_unidad != null ? m.cantidad * m.lote.costo_por_unidad : 0), 0)
+  const pesosHoy   = pesosDe(hoy)
+  const pesosTotal = pesosDe(mermas)
 
+  if (profile && !profile.sucursal_id) return <SinSucursal />
   if (loading) return <div className="p-8 text-gray-400">Cargando...</div>
 
   return (
@@ -223,10 +239,16 @@ export default function MermaPage() {
         <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
           <p className="text-xs text-gray-500">Merma hoy</p>
           <p className="text-xl font-bold text-red-600 tabular-nums">{kgHoy.toFixed(2)} kg</p>
+          {pesosHoy > 0 && (
+            <p className="text-xs text-red-400 tabular-nums">≈ ${pesosHoy.toFixed(0)} perdidos</p>
+          )}
         </div>
         <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
           <p className="text-xs text-gray-500">Últimos 100 registros</p>
           <p className="text-xl font-bold text-gray-700 tabular-nums">{kgTotal.toFixed(2)} kg</p>
+          {pesosTotal > 0 && (
+            <p className="text-xs text-gray-400 tabular-nums">≈ ${pesosTotal.toFixed(0)} perdidos</p>
+          )}
         </div>
       </div>
 
@@ -423,7 +445,14 @@ export default function MermaPage() {
               </div>
               <div className="text-right flex-shrink-0">
                 <p className="font-bold text-red-600 tabular-nums">{m.cantidad.toFixed(3)} kg</p>
-                <p className="text-xs text-gray-400">{formatFecha(m.fecha)}</p>
+                <p className="text-xs text-gray-400">
+                  {m.lote?.costo_por_unidad != null && (
+                    <span className="text-red-400 tabular-nums">
+                      ≈ ${(m.cantidad * m.lote.costo_por_unidad).toFixed(0)} ·{' '}
+                    </span>
+                  )}
+                  {formatFecha(m.fecha)}
+                </p>
               </div>
             </div>
 
