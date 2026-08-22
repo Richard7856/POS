@@ -75,6 +75,9 @@ export interface VentaItem {
   unidad: string
   precio_unitario: number
   subtotal: number
+  // Costo congelado al cobrar (FIFO ponderado, o precio_compra para piezas).
+  // En la unidad nativa del renglón. NULL = costo desconocido en ese momento.
+  costo_unitario: number | null
   lote_id: string | null      // null for 'pieza' products
   created_at: string
 }

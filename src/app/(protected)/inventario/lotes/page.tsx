@@ -1,8 +1,10 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { Suspense, useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
+import { calcGanancia, costoKgAUnidad } from '@/lib/ganancia'
 import type { Lote, Product } from '@/lib/types'
 
 const EMPTY_FORM = {
@@ -21,8 +23,20 @@ function formatFecha(iso: string) {
   })
 }
 
+// useSearchParams exige un límite de Suspense para el prerender estático.
 export default function LotesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-gray-400">Cargando...</div>}>
+      <LotesPageInner />
+    </Suspense>
+  )
+}
+
+function LotesPageInner() {
   const { profile, user } = useAuth()
+  // ?producto=<id> — llega desde Productos ("registrar entrada") o desde la
+  // lista de pedido: abre el formulario con ese producto ya elegido.
+  const productoParam = useSearchParams().get('producto')
   const canWrite = profile?.rol === 'admin' || profile?.rol === 'encargado'
 
   const [lotes, setLotes]       = useState<Lote[]>([])
@@ -32,6 +46,10 @@ export default function LotesPage() {
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving]     = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Al registrar la entrada, actualizar también el costo del producto en el
+  // catálogo — así la ganancia de productos/dashboard siempre refleja el costo
+  // real más reciente. Activado por default a propósito.
+  const [actualizarCosto, setActualizarCosto] = useState(true)
   // Filter by date — default today
   const [filterFecha, setFilterFecha] = useState(new Date().toISOString().slice(0, 10))
 
@@ -64,36 +82,84 @@ export default function LotesPage() {
 
   useEffect(() => { if (profile) load() }, [profile])
 
+  // Abre el form prellenado cuando venimos con ?producto= y ya hay catálogo.
+  useEffect(() => {
+    if (!productoParam || products.length === 0) return
+    if (products.some((p) => p.id === productoParam)) {
+      setForm((f) => ({ ...f, product_id: productoParam }))
+      setShowForm(true)
+    }
+    // Sólo al aterrizar: no re-abrir el form en cada recarga de products
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productoParam, products.length])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
     setSaveError(null)
 
     const cantidad = parseFloat(form.cantidad_inicial)
-    const payload = {
-      product_id:          form.product_id,
-      sucursal_id:         profile!.sucursal_id,
-      fecha_entrada:       form.fecha_entrada,
-      cantidad_inicial:    cantidad,
-      cantidad_disponible: cantidad,
-      costo_por_unidad:    form.costo_por_unidad ? parseFloat(form.costo_por_unidad) : null,
-      proveedor:           form.proveedor.trim() || null,
-      notas:               form.notas.trim() || null,
-      creado_por:          user?.id ?? null,
-    }
+    const costoNuevo = form.costo_por_unidad ? parseFloat(form.costo_por_unidad) : null
 
-    // Upsert: if a lote for this product+date already exists, update qty
-    const { error } = await supabase
-      .from('lotes')
-      .upsert(payload, { onConflict: 'product_id,sucursal_id,fecha_entrada' })
+    // ¿Ya hay una entrada de este producto en esta fecha? Entonces llegó otra
+    // tanda: se SUMA al lote del día (antes se sobrescribía y se perdía la
+    // primera). El costo del lote queda ponderado entre ambas tandas; para
+    // corregir un error de captura está el botón Ajustar.
+    const existente = lotes.find(
+      (l) => l.product_id === form.product_id && l.fecha_entrada === form.fecha_entrada
+    )
+
+    let error: { message: string } | null = null
+    if (existente) {
+      const costoPonderado =
+        costoNuevo == null ? existente.costo_por_unidad
+        : existente.costo_por_unidad == null ? costoNuevo
+        : (existente.cantidad_inicial * existente.costo_por_unidad + cantidad * costoNuevo) /
+          (existente.cantidad_inicial + cantidad)
+
+      ;({ error } = await supabase
+        .from('lotes')
+        .update({
+          cantidad_inicial:    parseFloat((existente.cantidad_inicial + cantidad).toFixed(6)),
+          cantidad_disponible: parseFloat((existente.cantidad_disponible + cantidad).toFixed(6)),
+          costo_por_unidad:    costoPonderado != null ? parseFloat(costoPonderado.toFixed(4)) : null,
+          proveedor:           form.proveedor.trim() || existente.proveedor,
+          notas:               form.notas.trim() || existente.notas,
+        })
+        .eq('id', existente.id))
+    } else {
+      ;({ error } = await supabase.from('lotes').insert({
+        product_id:          form.product_id,
+        sucursal_id:         profile!.sucursal_id,
+        fecha_entrada:       form.fecha_entrada,
+        cantidad_inicial:    cantidad,
+        cantidad_disponible: cantidad,
+        costo_por_unidad:    costoNuevo,
+        proveedor:           form.proveedor.trim() || null,
+        notas:               form.notas.trim() || null,
+        creado_por:          user?.id ?? null,
+      }))
+    }
 
     if (error) {
       setSaveError(error.message)
-    } else {
-      setForm(EMPTY_FORM)
-      setShowForm(false)
-      load()
+      setSaving(false)
+      return
     }
+
+    // Sincronizar el costo del catálogo con lo que realmente costó hoy.
+    // El lote guarda costo por KG; precio_compra va en la unidad del producto.
+    const prod = products.find((pr) => pr.id === form.product_id)
+    if (actualizarCosto && costoNuevo != null && prod) {
+      await supabase
+        .from('products')
+        .update({ precio_compra: parseFloat(costoKgAUnidad(costoNuevo, prod.unidad).toFixed(4)) })
+        .eq('id', prod.id)
+    }
+
+    setForm(EMPTY_FORM)
+    setShowForm(false)
+    load()
     setSaving(false)
   }
 
@@ -142,6 +208,39 @@ export default function LotesPage() {
   const filtered = lotes.filter((l) => l.fecha_entrada === filterFecha)
   const uniqueFechas = [...new Set(lotes.map((l) => l.fecha_entrada))].slice(0, 14)
 
+  // ── Derivados del formulario ───────────────────────────────────────────────
+  const prodElegido = products.find((p) => p.id === form.product_id) ?? null
+  const entradaExistente = prodElegido
+    ? lotes.find((l) => l.product_id === prodElegido.id && l.fecha_entrada === form.fecha_entrada)
+    : undefined
+  // Margen que deja este costo contra el precio de venta actual del producto.
+  // El costo se captura por kg; para productos en gramos se convierte.
+  const costoForm = form.costo_por_unidad ? parseFloat(form.costo_por_unidad) : null
+  const gananciaEntrada = prodElegido && costoForm != null
+    ? calcGanancia(prodElegido.precio_por_unidad, costoKgAUnidad(costoForm, prodElegido.unidad))
+    : null
+
+  // ── Stock actual: lo disponible HOY por producto, sin importar de qué día
+  //    sea el lote. La tabla de abajo filtra por fecha de entrada, así que sin
+  //    esto el stock viejo que sigue vivo no se ve en ninguna parte.
+  const stockActual = (() => {
+    const map = new Map<string, { nombre: string; kg: number; valor: number; costoCompleto: boolean }>()
+    for (const l of lotes) {
+      if (l.cantidad_disponible <= 0) continue
+      const prev = map.get(l.product_id) ?? {
+        nombre: l.product?.nombre ?? '—', kg: 0, valor: 0, costoCompleto: true,
+      }
+      prev.kg += l.cantidad_disponible
+      if (l.costo_por_unidad != null) prev.valor += l.cantidad_disponible * l.costo_por_unidad
+      else prev.costoCompleto = false
+      map.set(l.product_id, prev)
+    }
+    return [...map.entries()]
+      .map(([id, v]) => ({ id, ...v, kg: parseFloat(v.kg.toFixed(3)) }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre))
+  })()
+  const valorInventario = stockActual.reduce((s, x) => s + x.valor, 0)
+
   if (loading) return <div className="p-8 text-gray-400">Cargando...</div>
 
   return (
@@ -151,7 +250,9 @@ export default function LotesPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold text-gray-800">📦 Entradas de mercancía</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Un lote por producto por día</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Registra lo que llega; abajo, las entradas por día
+          </p>
         </div>
         {canWrite && (
           <button
@@ -181,6 +282,12 @@ export default function LotesPage() {
                   <option key={p.id} value={p.id}>{p.nombre} ({p.unidad})</option>
                 ))}
               </select>
+              {entradaExistente && (
+                <p className="text-xs text-blue-600 mt-1">
+                  Ya hay una entrada de {formatFecha(form.fecha_entrada)} con{' '}
+                  {entradaExistente.cantidad_inicial.toFixed(1)} kg — esta cantidad se <b>sumará</b> al lote del día.
+                </p>
+              )}
             </div>
 
             <div>
@@ -213,6 +320,20 @@ export default function LotesPage() {
                   className="flex-1 py-2 pr-3 text-sm focus:outline-none"
                 />
               </div>
+              {/* Margen en vivo contra el precio de venta actual del catálogo */}
+              {gananciaEntrada && prodElegido && (
+                <p className={`text-xs mt-1 font-medium ${
+                  gananciaEntrada.monto < 0 ? 'text-red-600'
+                    : gananciaEntrada.pct < 10 ? 'text-amber-600'
+                    : 'text-green-700'
+                }`}>
+                  {gananciaEntrada.monto < 0 ? (
+                    <>⚠ Vendes a ${prodElegido.precio_por_unidad.toFixed(2)}/{prodElegido.unidad} — <b>pierdes ${Math.abs(gananciaEntrada.monto).toFixed(2)}</b> por {prodElegido.unidad}. Sube el precio en Productos.</>
+                  ) : (
+                    <>Vendes a ${prodElegido.precio_por_unidad.toFixed(2)}/{prodElegido.unidad} → ganancia ${gananciaEntrada.monto.toFixed(2)} ({gananciaEntrada.pct}%)</>
+                  )}
+                </p>
+              )}
             </div>
 
             <div>
@@ -236,6 +357,18 @@ export default function LotesPage() {
             </div>
           </div>
 
+          {form.costo_por_unidad && (
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={actualizarCosto}
+                onChange={(e) => setActualizarCosto(e.target.checked)}
+                className="w-4 h-4 accent-green-600"
+              />
+              Actualizar el costo del producto en el catálogo con este precio
+            </label>
+          )}
+
           {saveError && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">{saveError}</div>
           )}
@@ -251,6 +384,35 @@ export default function LotesPage() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* ── Stock actual: lo que hay disponible hoy, venga del lote que venga ── */}
+      {stockActual.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h2 className="text-sm font-semibold text-gray-700">Stock actual</h2>
+            {canWrite && valorInventario > 0 && (
+              <span className="text-xs text-gray-400">
+                Valor a costo: <b className="text-gray-600">${valorInventario.toFixed(0)}</b>
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-px bg-gray-100">
+            {stockActual.map((s) => (
+              <div key={s.id} className="bg-white px-4 py-3 flex flex-col">
+                <span className="text-xs text-gray-500 truncate">{s.nombre}</span>
+                <span className="text-base font-bold text-gray-800 tabular-nums">
+                  {s.kg.toFixed(1)} <span className="text-xs font-normal text-gray-400">kg</span>
+                </span>
+                {canWrite && s.valor > 0 && (
+                  <span className="text-[11px] text-gray-400 tabular-nums">
+                    ${s.valor.toFixed(0)}{s.costoCompleto ? '' : '+'} a costo
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Date filter tabs */}

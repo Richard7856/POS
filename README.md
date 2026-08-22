@@ -42,6 +42,7 @@ migración nueva, para poder reconstruir el proyecto desde cero.
 20260822190200_storage_merma_fotos.sql  bucket de evidencia de merma
 20260822190300_private_helpers.sql   helpers de RLS fuera del esquema expuesto
 20260822190400_productos_solo_staff.sql  el catálogo lo edita solo admin/encargado
+20260822210000_venta_items_costo.sql     costo congelado por renglón de venta
 ```
 
 Aplicarlas a un proyecto nuevo:
@@ -116,6 +117,27 @@ cobrarla en otra; eso sí necesitaría una tabla en Postgres.
 La lógica de estado son funciones puras en `lib/cuentasAbiertas.ts`
 (`abrir`, `cerrar`, `renombrar`, `aplicarCart`), separadas del hook de React
 justamente para poder probarlas sin montar un componente.
+
+## Ganancia automática
+
+El flujo del dinero se calcula solo, sin capturas extra:
+
+1. **Entrada de mercancía**: capturas el costo/kg de lo que llegó. Al guardar,
+   el costo del producto en el catálogo se actualiza (checkbox activado por
+   default) y el formulario te muestra en vivo el margen contra tu precio de
+   venta — con advertencia si estás vendiendo abajo del costo.
+2. **Venta**: cada renglón congela el costo al que salió (promedio ponderado de
+   los lotes FIFO que lo surtieron; `precio_compra` para piezas) en
+   `venta_items.costo_unitario`. Si el costo cambia mañana, la ganancia de hoy
+   no se mueve.
+3. **Dashboard**: KPI de ganancia y margen por día/semana/mes (descuentos ya
+   restados) y columna de ganancia en el top de productos. Los renglones sin
+   costo capturado se excluyen y se marcan con "≈" en lugar de inventar margen.
+4. **Reabastecimiento**: la lista de pedido dice cuánto dinero llevar al
+   mercado (faltante × último costo) y cada renglón tiene botón para registrar
+   la entrada cuando llega.
+
+La aritmética vive en `lib/ganancia.ts` (funciones puras con pruebas).
 
 ## Modo offline
 

@@ -18,6 +18,7 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { CartItem } from '@/lib/types'
+import { costoPonderadoKg, costoKgAUnidad } from '@/lib/ganancia'
 import TicketReceipt from '@/components/TicketReceipt'
 
 type MetodoPago = 'efectivo' | 'tarjeta' | 'transferencia'
@@ -101,20 +102,22 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
   const resolveFifoLotes = async (
     productId: string,
     cantidadKg: number,
-  ): Promise<{ primaryLoteId: string | null; loteUpdates: LoteUpdate[] }> => {
-    if (!profile?.sucursal_id) return { primaryLoteId: null, loteUpdates: [] }
+  ): Promise<{ primaryLoteId: string | null; loteUpdates: LoteUpdate[]; costoPorKg: number | null }> => {
+    if (!profile?.sucursal_id) return { primaryLoteId: null, loteUpdates: [], costoPorKg: null }
 
     const { data: lotes } = await supabase
       .from('lotes')
-      .select('id, cantidad_disponible')
+      .select('id, cantidad_disponible, costo_por_unidad')
       .eq('product_id', productId)
       .eq('sucursal_id', profile.sucursal_id)
       .gt('cantidad_disponible', 0)
       .order('fecha_entrada', { ascending: true })
 
-    if (!lotes || lotes.length === 0) return { primaryLoteId: null, loteUpdates: [] }
+    if (!lotes || lotes.length === 0) return { primaryLoteId: null, loteUpdates: [], costoPorKg: null }
 
     const loteUpdates: LoteUpdate[] = []
+    // [kg tomados del lote, costo/kg de ese lote] — para el costo ponderado
+    const porciones: [number, number | null][] = []
     let remaining = cantidadKg
     let primaryLoteId: string | null = null
 
@@ -126,10 +129,11 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
         lote_id: lote.id,
         new_cantidad_disponible: parseFloat((lote.cantidad_disponible - deducted).toFixed(6)),
       })
+      porciones.push([deducted, lote.costo_por_unidad])
       remaining -= deducted
     }
 
-    return { primaryLoteId, loteUpdates }
+    return { primaryLoteId, loteUpdates, costoPorKg: costoPonderadoKg(porciones) }
   }
 
   // ── Handle payment ─────────────────────────────────────────────────────────
@@ -180,16 +184,28 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
       const items = await Promise.all(
         cart.map(async (item) => {
           let lote_id: string | null = null
+          // Costo congelado del renglón, en su unidad nativa. Fuente:
+          //   kg/g  → promedio ponderado de los lotes FIFO consumidos
+          //   pieza → precio_compra del catálogo
+          // Sin dato en ninguna fuente queda NULL: mejor "desconocido" que
+          // inventar ganancia del 100%.
+          let costo_unitario: number | null =
+            item.product.precio_compra ?? null
 
           if (item.product.unidad === 'kg' || item.product.unidad === 'g') {
             const cantidadKg = item.product.unidad === 'g'
               ? item.cantidad / 1000
               : item.cantidad
-            const { primaryLoteId, loteUpdates } = await resolveFifoLotes(
+            const { primaryLoteId, loteUpdates, costoPorKg } = await resolveFifoLotes(
               item.product.id, cantidadKg,
             )
             lote_id = primaryLoteId
             allLoteUpdates.push(...loteUpdates)
+            if (costoPorKg != null) {
+              costo_unitario = parseFloat(
+                costoKgAUnidad(costoPorKg, item.product.unidad).toFixed(4)
+              )
+            }
           }
 
           return {
@@ -200,6 +216,7 @@ export default function CheckoutModal({ cart, total, onConfirm, onClose }: Props
             unidad:          item.product.unidad,
             precio_unitario: item.precio_unitario,
             subtotal:        item.subtotal,
+            costo_unitario,
             lote_id,
           }
         })

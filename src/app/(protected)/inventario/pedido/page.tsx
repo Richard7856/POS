@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
@@ -16,6 +17,9 @@ interface ProductoReorden {
   stock_actual: number
   // How much to order to reach the minimum (or double it as a suggested quantity)
   faltante: number
+  // faltante × último costo conocido — cuánto dinero llevar al mercado.
+  // null cuando el producto no tiene costo capturado.
+  costo_estimado: number | null
   urgencia: 'agotado' | 'critico' | 'bajo'
 }
 
@@ -53,7 +57,7 @@ export default function PedidoPage() {
     // 1. Fetch all active kg/g products that have a stock_minimo set
     const { data: products } = await supabase
       .from('products')
-      .select('id, nombre, categoria, unidad, stock_minimo')
+      .select('id, nombre, categoria, unidad, stock_minimo, precio_compra')
       .eq('activo', true)
       .in('unidad', ['kg', 'g'])
       .not('stock_minimo', 'is', null)
@@ -97,6 +101,13 @@ export default function PedidoPage() {
       if (stockActual >= minimo) continue // OK, no need to order
 
       const pct = stockActual / minimo
+      const faltante = parseFloat((minimo - stockActual).toFixed(3))
+
+      // precio_compra va en la unidad del producto; el faltante está en kg.
+      // Para productos en gramos el costo por kg es ×1000.
+      const costoKg = p.precio_compra == null
+        ? null
+        : p.unidad === 'g' ? p.precio_compra * 1000 : p.precio_compra
 
       reorden.push({
         id:          p.id,
@@ -105,7 +116,8 @@ export default function PedidoPage() {
         unidad:      p.unidad,
         stock_minimo: minimo,
         stock_actual: parseFloat(stockActual.toFixed(3)),
-        faltante:    parseFloat((minimo - stockActual).toFixed(3)),
+        faltante,
+        costo_estimado: costoKg != null ? parseFloat((faltante * costoKg).toFixed(2)) : null,
         urgencia:    stockActual === 0 ? 'agotado' : pct < 0.25 ? 'critico' : 'bajo',
       })
     }
@@ -130,8 +142,12 @@ export default function PedidoPage() {
       '',
       ...items.map((item) => {
         const emoji = item.urgencia === 'agotado' ? '🔴' : item.urgencia === 'critico' ? '🟠' : '🟡'
-        return `${emoji} ${item.nombre.padEnd(24)} necesita ${item.faltante.toFixed(1)} kg  (tiene ${item.stock_actual.toFixed(1)} / mín ${item.stock_minimo} kg)`
+        const costo = item.costo_estimado != null ? `  ≈$${item.costo_estimado.toFixed(0)}` : ''
+        return `${emoji} ${item.nombre.padEnd(24)} necesita ${item.faltante.toFixed(1)} kg  (tiene ${item.stock_actual.toFixed(1)} / mín ${item.stock_minimo} kg)${costo}`
       }),
+      ...(costoTotalPedido > 0
+        ? ['', `💰 Costo estimado del pedido: $${costoTotalPedido.toFixed(0)}`]
+        : []),
     ]
     const texto = lineas.join('\n')
 
@@ -143,6 +159,11 @@ export default function PedidoPage() {
       })
     }
   }
+
+  // Cuánto dinero llevar al mercado para surtir todo lo de la lista.
+  // Sólo suma renglones con costo conocido; el "+" del render avisa si faltan.
+  const costoTotalPedido = items.reduce((s, i) => s + (i.costo_estimado ?? 0), 0)
+  const sinCosto = items.filter((i) => i.costo_estimado == null).length
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -208,6 +229,21 @@ export default function PedidoPage() {
       {/* Reorder list */}
       {!loading && items.length > 0 && (
         <>
+          {/* Cuánto llevar al mercado */}
+          {costoTotalPedido > 0 && (
+            <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-3 mb-4 shadow-sm">
+              <span className="text-2xl">💰</span>
+              <div>
+                <p className="text-sm font-semibold text-gray-800 tabular-nums">
+                  ≈ ${costoTotalPedido.toFixed(0)} para surtir todo
+                </p>
+                <p className="text-xs text-gray-400">
+                  al último costo conocido{sinCosto > 0 ? ` · ${sinCosto} producto${sinCosto !== 1 ? 's' : ''} sin costo capturado` : ''}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Summary pills */}
           <div className="flex gap-2 mb-4 flex-wrap">
             {(['agotado', 'critico', 'bajo'] as const).map((u) => {
@@ -266,8 +302,21 @@ export default function PedidoPage() {
                         <p className={`font-bold tabular-nums text-sm ${cfg.text}`}>
                           +{item.faltante.toFixed(1)} kg
                         </p>
-                        <p className="text-xs text-gray-300">para llegar al mínimo</p>
+                        <p className="text-xs text-gray-400 tabular-nums">
+                          {item.costo_estimado != null
+                            ? `≈ $${item.costo_estimado.toFixed(0)}`
+                            : 'sin costo'}
+                        </p>
                       </div>
+
+                      {/* Llegó la mercancía → registrar la entrada aquí mismo */}
+                      <Link
+                        href={`/inventario/lotes?producto=${item.id}`}
+                        title={`Registrar entrada de ${item.nombre}`}
+                        className="flex-shrink-0 text-xs font-medium text-green-700 border border-green-200 hover:bg-green-50 rounded-lg px-2.5 py-1.5 transition-colors"
+                      >
+                        ＋ Entrada
+                      </Link>
                     </div>
                   )
                 })}

@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { Product } from '@/lib/types'
 import MarginCalculator, { computePrecioVenta } from '@/components/MarginCalculator'
+import { calcGanancia } from '@/lib/ganancia'
 import BarcodeScanner from '@/components/BarcodeScanner'
 import { getProductsCache, saveProductsCache, upsertProductCache } from '@/lib/productCache'
 import { enqueue, getPendingCount } from '@/lib/offlineQueue'
@@ -46,6 +48,10 @@ export default function ProductosPage() {
   const [showScanner, setShowScanner] = useState(false)
   const [isOnline, setIsOnline]       = useState(true)
   const [pendingCount, setPendingCount] = useState(0)
+  // Stock disponible por producto (suma de lotes de la sucursal). Vacío offline.
+  const [stockMap, setStockMap] = useState<Map<string, number>>(new Map())
+  // Producto recién creado a granel → CTA para registrarle su primera entrada
+  const [recienCreado, setRecienCreado] = useState<{ id: string; nombre: string } | null>(null)
 
   const refreshPending = () => setPendingCount(getPendingCount())
 
@@ -63,17 +69,30 @@ export default function ProductosPage() {
       return
     }
 
-    // Fetch fresh data in background (or foreground on first load)
-    const { data } = await supabase
-      .from('products')
-      .select('*')
-      .order('categoria', { ascending: true })
-      .order('nombre', { ascending: true })
+    // Fetch fresh data in background (or foreground on first load).
+    // El stock por producto sale de los lotes con disponible > 0 (RLS ya
+    // limita a la sucursal del perfil para roles no-admin).
+    const [{ data }, { data: lotesData }] = await Promise.all([
+      supabase
+        .from('products')
+        .select('*')
+        .order('categoria', { ascending: true })
+        .order('nombre', { ascending: true }),
+      supabase
+        .from('lotes')
+        .select('product_id, cantidad_disponible')
+        .gt('cantidad_disponible', 0),
+    ])
 
     if (data) {
       setProducts(data)
       saveProductsCache(data)  // keep cache warm for next offline session
     }
+    const sm = new Map<string, number>()
+    for (const l of lotesData ?? []) {
+      sm.set(l.product_id, (sm.get(l.product_id) ?? 0) + l.cantidad_disponible)
+    }
+    setStockMap(sm)
     setLoading(false)
   }
 
@@ -120,7 +139,16 @@ export default function ProductosPage() {
       if (editingId) {
         await supabase.from('products').update(payload).eq('id', editingId)
       } else {
-        await supabase.from('products').insert({ ...payload, activo: true })
+        const { data: nuevo } = await supabase
+          .from('products')
+          .insert({ ...payload, activo: true })
+          .select('id, nombre, unidad')
+          .single()
+        // Un producto a granel sin lotes no aparece en el POS con stock: el
+        // siguiente paso natural es darle su primera entrada. Se lo sugerimos.
+        if (nuevo && (nuevo.unidad === 'kg' || nuevo.unidad === 'g')) {
+          setRecienCreado({ id: nuevo.id, nombre: nuevo.nombre })
+        }
       }
       loadProducts()
     } else {
@@ -241,6 +269,33 @@ export default function ProductosPage() {
         )}
       </div>
 
+      {/* Producto a granel recién creado → siguiente paso: darle stock */}
+      {recienCreado && !showForm && (
+        <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 mb-4">
+          <span className="text-xl">✅</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-green-800 truncate">
+              {recienCreado.nombre} creado
+            </p>
+            <p className="text-xs text-green-600">
+              Aún no tiene inventario — registra su primera entrada para verlo con stock
+            </p>
+          </div>
+          <Link
+            href={`/inventario/lotes?producto=${recienCreado.id}`}
+            className="flex-shrink-0 bg-green-600 hover:bg-green-700 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+          >
+            Registrar entrada →
+          </Link>
+          <button
+            onClick={() => setRecienCreado(null)}
+            className="flex-shrink-0 text-green-300 hover:text-green-600 text-sm"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Add / Edit form */}
       {showForm && canEdit && (
         <form
@@ -286,6 +341,24 @@ export default function ProductosPage() {
                     : 'border-gray-300'
                 }`}
               />
+              {/* Ganancia en vivo: con precio y costo capturados, el margen se
+                  calcula solo — sin pasar por la calculadora */}
+              {canSeeCost && (() => {
+                const g = calcGanancia(
+                  parseFloat(effectivePrecio) || null,
+                  form.precio_compra ? parseFloat(form.precio_compra) : null,
+                )
+                if (!g) return null
+                return (
+                  <p className={`text-xs mt-1 font-medium ${
+                    g.monto < 0 ? 'text-red-600' : g.pct < 10 ? 'text-amber-600' : 'text-green-700'
+                  }`}>
+                    {g.monto < 0
+                      ? `⚠ Pierdes $${Math.abs(g.monto).toFixed(2)} por ${form.unidad}`
+                      : `Ganancia: $${g.monto.toFixed(2)} por ${form.unidad} (${g.pct}%)`}
+                  </p>
+                )
+              })()}
             </div>
 
             {/* Unidad */}
@@ -408,6 +481,10 @@ export default function ProductosPage() {
               {canSeeCost && (
                 <th className="text-left px-4 py-3 text-gray-500 font-medium">Costo</th>
               )}
+              {canSeeCost && (
+                <th className="text-right px-4 py-3 text-gray-500 font-medium">Ganancia</th>
+              )}
+              <th className="text-right px-4 py-3 text-gray-500 font-medium">Stock</th>
               <th className="text-left px-4 py-3 text-gray-500 font-medium">Unidad</th>
               <th className="text-left px-4 py-3 text-gray-500 font-medium hidden sm:table-cell">Categoría</th>
               <th className="text-left px-4 py-3 text-gray-500 font-medium hidden lg:table-cell">EAN</th>
@@ -430,6 +507,36 @@ export default function ProductosPage() {
                     {product.precio_compra != null ? `$${product.precio_compra.toFixed(2)}` : '—'}
                   </td>
                 )}
+                {canSeeCost && (() => {
+                  const g = calcGanancia(product.precio_por_unidad, product.precio_compra)
+                  return (
+                    <td className={`px-4 py-3 text-right tabular-nums text-xs font-medium ${
+                      !g ? 'text-gray-300'
+                        : g.monto < 0 ? 'text-red-600'
+                        : g.pct < 10 ? 'text-amber-600'
+                        : 'text-green-700'
+                    }`}>
+                      {g ? `$${g.monto.toFixed(2)} · ${g.pct}%` : '—'}
+                    </td>
+                  )
+                })()}
+                <td className="px-4 py-3 text-right tabular-nums text-xs">
+                  {product.unidad === 'pieza' ? (
+                    <span className="text-gray-300">—</span>
+                  ) : (() => {
+                    const stock = stockMap.get(product.id) ?? 0
+                    const bajo = product.stock_minimo != null && stock < product.stock_minimo
+                    return (
+                      <span className={
+                        stock <= 0 ? 'text-red-600 font-bold'
+                          : bajo ? 'text-amber-600 font-semibold'
+                          : 'text-gray-600'
+                      }>
+                        {stock.toFixed(1)} kg{bajo && stock > 0 ? ' ⚠' : stock <= 0 ? ' ∅' : ''}
+                      </span>
+                    )
+                  })()}
+                </td>
                 <td className="px-4 py-3 text-gray-500">{product.unidad}</td>
                 <td className="px-4 py-3 text-gray-400 hidden sm:table-cell">{product.categoria ?? '—'}</td>
                 <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">{product.ean ?? '—'}</td>

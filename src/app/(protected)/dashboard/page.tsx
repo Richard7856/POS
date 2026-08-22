@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import { DashboardSkeleton } from '@/components/Skeleton'
+import { gananciaDeItems } from '@/lib/ganancia'
 
 // ─── Local Types ──────────────────────────────────────────────────────────────
 
@@ -20,6 +21,8 @@ interface TopProducto {
   nombre: string
   total_kg: number
   total_pesos: number
+  // Ganancia acumulada de los renglones con costo conocido; null si ninguno lo tiene
+  ganancia: number | null
   veces: number
 }
 
@@ -111,7 +114,7 @@ export default function DashboardPage() {
     // sucursalesQuery only makes sense for admin — non-admins get a null promise.
     let ventasQ = supabase
       .from('ventas')
-      .select('id, total, metodo_pago, sucursal_id, created_at')
+      .select('id, total, descuento, metodo_pago, sucursal_id, created_at')
       .gte('created_at', mes)
       .order('created_at', { ascending: false })
       .limit(2000)
@@ -167,10 +170,9 @@ export default function DashboardPage() {
       ventaIds.length > 0
         ? supabase
             .from('venta_items')
-            .select('nombre_producto, cantidad, unidad, subtotal')
+            .select('venta_id, nombre_producto, cantidad, unidad, subtotal, costo_unitario')
             .in('venta_id', ventaIds)
-            .in('unidad', ['kg', 'g'])
-        : Promise.resolve({ data: [] as { nombre_producto: string; cantidad: number; unidad: string; subtotal: number }[] }),
+        : Promise.resolve({ data: [] as { venta_id: string; nombre_producto: string; cantidad: number; unidad: string; subtotal: number; costo_unitario: number | null }[] }),
       pids.length > 0 ? lotesMinQ : Promise.resolve({ data: [] as { product_id: string; cantidad_disponible: number }[] }),
     ])
 
@@ -178,20 +180,47 @@ export default function DashboardPage() {
     const ventasHoy    = ventasData.filter((v) => v.created_at >= today)
     const ventasSemana = ventasData.filter((v) => v.created_at >= lunes)
 
-    function buildKpis(ventas: typeof ventasData): KpiBlock[] {
+    // Ganancia del periodo a partir de los renglones vendidos: cada venta_item
+    // trae congelado el costo al que salió (FIFO/precio_compra); los renglones
+    // sin costo se excluyen en lugar de contarse como pura ganancia. A eso se
+    // le restan los descuentos hechos en caja.
+    const allItems = itemsResult.data ?? []
+    const ventaFecha = new Map(ventasData.map((v) => [v.id, v.created_at]))
+
+    function buildKpis(ventas: typeof ventasData, desde: string | null): KpiBlock[] {
       const total   = ventas.reduce((s, v) => s + v.total, 0)
       const count   = ventas.length
       const ticket  = count > 0 ? total / count : 0
+
+      const itemsPeriodo = allItems.filter((it) => {
+        const f = ventaFecha.get(it.venta_id)
+        return f != null && (desde === null || f >= desde)
+      })
+      const { ganancia, ventaConCosto, ventaTotal } = gananciaDeItems(itemsPeriodo)
+      const descuentos = ventas.reduce((s, v) => s + (v.descuento ?? 0), 0)
+      const gananciaNeta = ganancia - descuentos
+      // "≈" cuando parte de la venta no tiene costo capturado
+      const parcial = ventaConCosto < ventaTotal - 0.01
+      const margen = total > 0 ? (gananciaNeta / total) * 100 : 0
+
       return [
         { label: 'Total vendido',   value: fmt(total), color: 'text-green-700' },
+        {
+          label: 'Ganancia',
+          value: ventaConCosto > 0 ? `${parcial ? '≈' : ''}${fmt(gananciaNeta)}` : '—',
+          sub:   ventaConCosto > 0
+            ? `margen ${margen.toFixed(0)}%${parcial ? ' · hay ventas sin costo' : ''}`
+            : 'captura costos en las entradas',
+          color: gananciaNeta < 0 ? 'text-red-600' : 'text-emerald-600',
+        },
         { label: 'Ventas',          value: count.toString() },
         { label: 'Ticket promedio', value: fmt(ticket) },
       ]
     }
 
-    setKpisHoy(buildKpis(ventasHoy))
-    setKpisSemana(buildKpis(ventasSemana))
-    setKpisMes(buildKpis(ventasData))
+    setKpisHoy(buildKpis(ventasHoy, today))
+    setKpisSemana(buildKpis(ventasSemana, lunes))
+    setKpisMes(buildKpis(ventasData, null))
 
     // Métodos de pago (hoy) — computed from already-fetched ventas
     const pagoMap = new Map<string, { total: number; count: number }>()
@@ -205,19 +234,23 @@ export default function DashboardPage() {
         .sort((a, b) => b.total - a.total)
     )
 
-    // Top productos — computed from venta_items fetched in Round 2
-    const items = itemsResult.data ?? []
+    // Top productos — kg/g como siempre (mezclar piezas ensucia la columna kg)
+    const items = allItems.filter((it) => it.unidad === 'kg' || it.unidad === 'g')
     if (items.length > 0) {
       const productMap = new Map<string, TopProducto>()
       for (const item of items) {
         const kgQty = item.unidad === 'g' ? item.cantidad / 1000 : item.cantidad
         const prev = productMap.get(item.nombre_producto) ?? {
-          nombre: item.nombre_producto, total_kg: 0, total_pesos: 0, veces: 0,
+          nombre: item.nombre_producto, total_kg: 0, total_pesos: 0, ganancia: null, veces: 0,
         }
+        const gananciaItem = item.costo_unitario != null
+          ? item.subtotal - item.costo_unitario * item.cantidad
+          : null
         productMap.set(item.nombre_producto, {
           ...prev,
           total_kg:    parseFloat((prev.total_kg + kgQty).toFixed(3)),
           total_pesos: prev.total_pesos + item.subtotal,
+          ganancia:    gananciaItem != null ? (prev.ganancia ?? 0) + gananciaItem : prev.ganancia,
           veces:       prev.veces + 1,
         })
       }
@@ -320,7 +353,7 @@ export default function DashboardPage() {
       ).map(({ title, kpis }) => (
         <section key={title}>
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">{title}</h2>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {kpis.map((k) => (
               <div key={k.label} className="bg-white rounded-xl border border-gray-200 px-4 py-3 shadow-sm">
                 <p className="text-xs text-gray-500">{k.label}</p>
@@ -398,6 +431,7 @@ export default function DashboardPage() {
                 <th className="text-left px-4 py-2 text-gray-500 font-medium">Producto</th>
                 <th className="text-right px-4 py-2 text-gray-500 font-medium">kg vendidos</th>
                 <th className="text-right px-4 py-2 text-gray-500 font-medium">Total $</th>
+                <th className="text-right px-4 py-2 text-gray-500 font-medium hidden sm:table-cell">Ganancia</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -410,6 +444,13 @@ export default function DashboardPage() {
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-green-700">
                     {fmt(p.total_pesos)}
+                  </td>
+                  <td className={`px-4 py-2.5 text-right tabular-nums hidden sm:table-cell ${
+                    p.ganancia == null ? 'text-gray-300'
+                      : p.ganancia < 0 ? 'text-red-600 font-semibold'
+                      : 'text-emerald-600 font-semibold'
+                  }`}>
+                    {p.ganancia != null ? fmt(p.ganancia) : '—'}
                   </td>
                 </tr>
               ))}
