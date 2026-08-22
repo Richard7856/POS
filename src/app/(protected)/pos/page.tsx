@@ -2,13 +2,15 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Product, CartItem } from '@/lib/types'
+import { Product } from '@/lib/types'
 import { useAuth } from '@/context/AuthContext'
 import { useBluetoothScale } from '@/hooks/useBluetoothScale'
 import { usePromociones, ComboNotification } from '@/hooks/usePromociones'
 import WeightModal from '@/components/WeightModal'
 import CheckoutModal from '@/components/CheckoutModal'
 import MovimientoCajaModal from '@/components/MovimientoCajaModal'
+import CuentasBar from '@/components/CuentasBar'
+import { useCuentas } from '@/hooks/useCuentas'
 import { POSSkeleton } from '@/components/Skeleton'
 import { getProductsCache, saveProductsCache } from '@/lib/productCache'
 
@@ -20,7 +22,14 @@ export default function POSPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('Todos')
-  const [cart, setCart] = useState<CartItem[]>([])
+  // El carrito ya no es un estado suelto: es el de la cuenta activa. `cart` y
+  // `setCart` se comportan igual que antes, así que el resto de la lógica
+  // (promos, checkout, báscula) no cambia.
+  const {
+    cuentas, activaId, cuentaActiva, cart, setCart, hydrated,
+    abrirCuenta, cerrarCuenta, cambiarACuenta, renombrarCuenta,
+    vaciarCuentaActiva, puedeAbrirMas,
+  } = useCuentas()
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [showCheckout, setShowCheckout] = useState(false)
   const [showMobileCart, setShowMobileCart] = useState(false)
@@ -77,6 +86,12 @@ export default function POSPage() {
     )
     setComboNotifs(notifs)
   }, [cart, getComboNotifications, dismissedCombos])
+
+  // Los combos descartados son por cuenta: al cambiar de cliente vuelven a
+  // mostrarse los avisos que correspondan a SU carrito.
+  useEffect(() => {
+    setDismissedCombos(new Set())
+  }, [activaId])
 
   // Category list
   const categories = [
@@ -137,13 +152,13 @@ export default function POSPage() {
         },
       ]
     })
-  }, [applyDescuento, getComboDescuentoForProduct])
+  }, [applyDescuento, getComboDescuentoForProduct, setCart])
 
   const removeFromCart = useCallback((itemId: string) => {
     setCart((prev) => prev.filter((i) => i.id !== itemId))
-  }, [])
+  }, [setCart])
 
-  const clearCart = useCallback(() => setCart([]), [])
+  const clearCart = vaciarCuentaActiva
 
   const cartTotal = cart.reduce((sum, i) => sum + i.subtotal, 0)
 
@@ -245,7 +260,9 @@ export default function POSPage() {
     )
   }
 
-  if (loading) return <POSSkeleton />
+  // `hydrated` espera a que las cuentas se lean de localStorage: sin esto se
+  // vería un carrito vacío por un instante tras recargar.
+  if (loading || !hydrated) return <POSSkeleton />
 
   if (loadError) return (
     <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
@@ -261,8 +278,23 @@ export default function POSPage() {
     </div>
   )
 
+  const nombreCuenta = cuentaActiva?.nombre ?? 'Cuenta'
+
   return (
-    <div className="flex flex-col md:flex-row h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
+
+      {/* ── Cuentas abiertas ── */}
+      <CuentasBar
+        cuentas={cuentas}
+        activaId={activaId}
+        puedeAbrirMas={puedeAbrirMas}
+        onSelect={cambiarACuenta}
+        onNueva={abrirCuenta}
+        onCerrar={cerrarCuenta}
+        onRenombrar={renombrarCuenta}
+      />
+
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
 
       {/* ── Products panel ── */}
       <div className="flex-1 flex flex-col md:border-r border-gray-200 overflow-hidden bg-white">
@@ -377,8 +409,8 @@ export default function POSPage() {
 
       {/* ── Desktop cart panel ── */}
       <div className="hidden md:flex md:w-64 lg:w-80 flex-col bg-white flex-shrink-0">
-        <div className="px-4 py-3 border-b border-gray-200 font-bold text-gray-800">
-          🛒 Carrito{' '}
+        <div className="px-4 py-3 border-b border-gray-200 font-bold text-gray-800 truncate">
+          🛒 {nombreCuenta}{' '}
           {cart.length > 0 && <span className="text-sm font-normal text-gray-400">({cart.length})</span>}
         </div>
         <div className="flex-1 overflow-y-auto">
@@ -410,7 +442,7 @@ export default function POSPage() {
           <div className="flex-1 bg-black/40" onClick={() => setShowMobileCart(false)} />
           <div className="bg-white rounded-t-2xl max-h-[80vh] flex flex-col shadow-2xl">
             <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-              <span className="font-bold text-gray-800 text-base">🛒 Carrito ({cart.length})</span>
+              <span className="font-bold text-gray-800 text-base truncate">🛒 {nombreCuenta} ({cart.length})</span>
               <button onClick={() => setShowMobileCart(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
             </div>
             <div className="flex-1 overflow-y-auto">
@@ -432,10 +464,17 @@ export default function POSPage() {
       {/* Checkout modal */}
       {showCheckout && (
         <CheckoutModal cart={cart} total={cartTotal}
-          onConfirm={() => { clearCart(); setShowCheckout(false) }}
+          onConfirm={() => {
+            // Cobrada = atendida: la cuenta se cierra y el POS salta a la
+            // siguiente abierta (o abre una vacía si era la única).
+            cerrarCuenta(activaId)
+            setShowCheckout(false)
+          }}
           onClose={() => setShowCheckout(false)}
         />
       )}
+
+      </div>
 
       {/* Cash movement modal — quick access during the day */}
       {showMovimiento && (

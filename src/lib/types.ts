@@ -45,6 +45,17 @@ export interface CartItem {
   promo?: PromoAplicada    // set when a promo is active for this item
 }
 
+// Una cuenta abierta en el POS: un cliente que está siendo atendido.
+// Vive solo en el dispositivo (localStorage) hasta que se cobra; en ese momento
+// se convierte en una Venta. Permite atender a varios clientes a la vez sin
+// perder el carrito de ninguno.
+export interface Cuenta {
+  id: string
+  nombre: string       // "Cuenta 1" o el que le ponga el cajero
+  cart: CartItem[]
+  createdAt: number    // unix ms — ordena las pestañas por antigüedad
+}
+
 export interface Venta {
   id: string
   total: number

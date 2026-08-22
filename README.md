@@ -85,7 +85,7 @@ service role.
 
 | Ruta | Qué hace | Quién |
 |---|---|---|
-| `/pos` | carrito, báscula Bluetooth, escáner EAN, promos | todos |
+| `/pos` | cuentas múltiples, báscula Bluetooth, escáner EAN, promos | todos |
 | `/productos` | catálogo, precios, EAN, stock mínimo | todos (costo solo staff) |
 | `/historial` | ventas del día, ticket, devoluciones | todos |
 | `/inventario/merma` | merma con foto de evidencia | todos |
@@ -100,6 +100,22 @@ service role.
 - **Báscula Bluetooth** (`useBluetoothScale`): Femmto BWS12, Arboleaf QN-KS,
   Etekcity y Assistrus B03H (Nordic UART). Requiere Web Bluetooth → Chrome.
 - **Escáner EAN**: `BarcodeDetector` nativo, con captura manual como respaldo.
+
+## Cuentas múltiples
+
+El POS atiende a varios clientes a la vez: cada cuenta abierta es una pestaña
+con su propio carrito, y sólo una está en pantalla. Se pueden renombrar
+("Doña Mari", "El de la camioneta"), descartar —con confirmación si ya tienen
+artículos— y al cobrar una, se cierra y el POS salta a la siguiente.
+
+Viven en `localStorage` (`pos_cuentas_v1`), no en la BD: sobreviven a un refresh
+o a que se caiga la señal, que es cuando más duele perder un carrito a medias.
+Son por dispositivo — hoy no se puede dejar una cuenta pendiente en una caja y
+cobrarla en otra; eso sí necesitaría una tabla en Postgres.
+
+La lógica de estado son funciones puras en `lib/cuentasAbiertas.ts`
+(`abrir`, `cerrar`, `renombrar`, `aplicarCart`), separadas del hook de React
+justamente para poder probarlas sin montar un componente.
 
 ## Modo offline
 
