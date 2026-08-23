@@ -149,6 +149,14 @@ solo y cada registro muestra el dinero perdido al costo del lote.
 Entradas, merma, pedido y corte operan por sucursal: un perfil sin sucursal
 asignada ve un aviso claro (antes fallaban en silencio con pantallas vacías).
 
+## La venta es atómica
+
+El cobro completo corre en el RPC `registrar_venta` (Postgres): venta, pagos,
+renglones y descuento FIFO en **una transacción con lock sobre los lotes**. O
+entra la venta completa o no entra nada, y dos cajas cobrando el mismo producto
+se forman en fila en lugar de pisarse el inventario. El FIFO canónico vive ahí;
+`lib/stock.ts` sólo conserva lo que la UI necesita para mostrar existencias.
+
 ## Compra por bulto (caja, manojo grande, arpilla)
 
 Cuando se compra en una unidad y se vende en otra —el cilantro llega en manojo
@@ -205,9 +213,7 @@ sin internet no se puede cerrar una venta.
 
 ## Pendientes conocidos
 
-1. La venta no es atómica — 4 escrituras sueltas desde el navegador. Debería ser
-   un RPC de Postgres en una sola transacción.
-2. El descuento FIFO lee y escribe el valor absoluto de `cantidad_disponible`:
-   dos cajas vendiendo el mismo producto a la vez se pisan.
-3. El cobro no funciona offline (ver arriba).
-4. Sin tests ni CI.
+1. El cobro no funciona offline (ver arriba).
+2. La merma aún descuenta el lote con lectura+escritura desde el navegador
+   (mismo patrón que tenía el cobro); moverla a un RPC como registrar_venta.
+3. Sin CI (las pruebas de lógica corren a mano).

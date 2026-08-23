@@ -23,9 +23,8 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { CartItem } from '@/lib/types'
-import { costoPonderadoKg, costoKgAUnidad } from '@/lib/ganancia'
-import { planFifo } from '@/lib/stock'
-import { aInventario } from '@/lib/unidades'
+// El FIFO, el costo y las escrituras viven en el RPC registrar_venta
+// (una sola transacción en Postgres); aquí sólo se arma el payload.
 import TicketReceipt from '@/components/TicketReceipt'
 
 type MetodoPago = 'efectivo' | 'tarjeta' | 'transferencia'
@@ -46,12 +45,6 @@ interface Props {
   onClose: () => void
 }
 
-// Represents a pending update to a lote after FIFO deduction
-interface LoteUpdate {
-  lote_id: string
-  new_cantidad_disponible: number
-}
-
 type DescuentoMode = 'porcentaje' | 'monto'
 
 // ── Sale data passed to TicketReceipt after payment ───────────────────────────
@@ -70,7 +63,7 @@ export interface CompletedSale {
 export default function CheckoutModal({
   cart, total, onVentaGuardada, onConfirm, onClose,
 }: Props) {
-  const { user, profile } = useAuth()
+  const { profile } = useAuth()
 
   // ── Step state ─────────────────────────────────────────────────────────────
   // 'form'   → payment entry
@@ -110,158 +103,50 @@ export default function CheckoutModal({
   const pagoMixtoFaltan = parseFloat((finalTotal - pagoMixtoTotal).toFixed(2))
   const pagoMixtoValid  = Math.abs(pagoMixtoFaltan) < 0.02  // ±2¢ tolerance
 
-  // ── FIFO lote deduction ────────────────────────────────────────────────────
-  const resolveFifoLotes = async (
-    productId: string,
-    cantidadKg: number,
-  ): Promise<{
-    primaryLoteId: string | null
-    loteUpdates: LoteUpdate[]
-    costoPorKg: number | null
-    faltante: number
-  }> => {
-    if (!profile?.sucursal_id) {
-      return { primaryLoteId: null, loteUpdates: [], costoPorKg: null, faltante: cantidadKg }
-    }
-
-    // Se traen TODOS los lotes (incluidos los que ya están en 0 o negativos):
-    // planFifo consume los positivos y carga el faltante al más reciente, para
-    // que el hueco quede visible en lugar de desaparecer.
-    const { data: lotes } = await supabase
-      .from('lotes')
-      .select('id, cantidad_disponible, costo_por_unidad')
-      .eq('product_id', productId)
-      .eq('sucursal_id', profile.sucursal_id)
-      .order('fecha_entrada', { ascending: true })
-
-    const plan = planFifo(lotes ?? [], cantidadKg)
-
-    return {
-      primaryLoteId: plan.primaryLoteId,
-      loteUpdates: plan.updates.map((u) => ({
-        lote_id: u.lote_id,
-        new_cantidad_disponible: u.nueva,
-      })),
-      costoPorKg: costoPonderadoKg(plan.porciones),
-      faltante: plan.faltante,
-    }
-  }
-
   // ── Handle payment ─────────────────────────────────────────────────────────
   const handlePagar = async () => {
     setLoading(true)
     setError(null)
 
     try {
-      // Determine metodo_pago value
       const metodoFinal: string = pagoMixto ? 'mixto' : metodoPago
 
-      // 1. Insert venta header
-      const { data: venta, error: ventaError } = await supabase
-        .from('ventas')
-        .insert({
-          total:       finalTotal,
-          descuento:   descuentoAmt,
-          metodo_pago: metodoFinal,
-          sucursal_id: profile?.sucursal_id ?? null,
-          cajero_id:   user?.id ?? null,
-        })
-        .select()
-        .single()
-
-      if (ventaError) throw new Error(`Error al crear venta: ${ventaError.message}`)
-
-      // 2. For split payments, insert venta_pagos rows
-      if (pagoMixto) {
-        const pagoRows = METODOS
-          .filter((m) => parseFloat(pagosAmounts[m.value]) > 0)
-          .map((m) => ({
-            venta_id: venta.id,
-            metodo:   m.value,
-            monto:    parseFloat(pagosAmounts[m.value]),
-          }))
-
-        if (pagoRows.length > 0) {
-          const { error: pagosError } = await supabase
-            .from('venta_pagos')
-            .insert(pagoRows)
-          if (pagosError) throw new Error(`Error al guardar pagos: ${pagosError.message}`)
-        }
-      }
-
-      // 3. Resolve FIFO lotes + build venta_items
-      const allLoteUpdates: LoteUpdate[] = []
-
-      const items = await Promise.all(
-        cart.map(async (item) => {
-          let lote_id: string | null = null
-          // Costo congelado del renglón, en su unidad nativa. Fuente:
-          //   kg/g  → promedio ponderado de los lotes FIFO consumidos
-          //   pieza → precio_compra del catálogo
-          // Sin dato en ninguna fuente queda NULL: mejor "desconocido" que
-          // inventar ganancia del 100%.
-          let costo_unitario: number | null =
-            item.product.precio_compra ?? null
-
-          // Todos los productos llevan lotes, incluidos los de por pieza:
-          // un manojo de cilantro también es inventario que se acaba.
-          {
-            const cantidadKg = aInventario(item.cantidad, item.product.unidad)
-            const { primaryLoteId, loteUpdates, costoPorKg } = await resolveFifoLotes(
-              item.product.id, cantidadKg,
-            )
-            lote_id = primaryLoteId
-            allLoteUpdates.push(...loteUpdates)
-            if (costoPorKg != null) {
-              costo_unitario = parseFloat(
-                costoKgAUnidad(costoPorKg, item.product.unidad).toFixed(4)
-              )
-            }
-          }
-
-          return {
-            venta_id:        venta.id,
-            product_id:      item.product.id,
-            nombre_producto: item.product.nombre,
-            cantidad:        item.cantidad,
-            unidad:          item.product.unidad,
-            precio_unitario: item.precio_unitario,
-            subtotal:        item.subtotal,
-            costo_unitario,
-            lote_id,
-          }
-        })
-      )
-
-      // 4. Insert all line items
-      const { error: itemsError } = await supabase.from('venta_items').insert(items)
-      if (itemsError) throw new Error(`Error al guardar ítems: ${itemsError.message}`)
-
-      // 5. Apply FIFO lote deductions sequentially
-      for (const { lote_id, new_cantidad_disponible } of allLoteUpdates) {
-        const { error: loteError } = await supabase
-          .from('lotes')
-          .update({ cantidad_disponible: new_cantidad_disponible })
-          .eq('id', lote_id)
-        if (loteError) {
-          console.error(`FIFO deduction failed for lote ${lote_id}:`, loteError.message)
-        }
-      }
-
-      // 6. Show ticket (step 2) instead of closing immediately
-      const activePagos = pagoMixto
+      const activePagosRpc = pagoMixto
         ? METODOS
             .filter((m) => parseFloat(pagosAmounts[m.value]) > 0)
             .map((m) => ({ metodo: m.value, monto: parseFloat(pagosAmounts[m.value]) }))
         : []
 
+      // Todo el cobro en UNA transacción del servidor: venta + pagos + items +
+      // descuento FIFO con lock. O entra completa o no entra nada — y dos
+      // cajas cobrando lo mismo se forman en fila en vez de pisarse.
+      const { data: ventaId, error: rpcError } = await supabase.rpc('registrar_venta', {
+        p_total:     finalTotal,
+        p_descuento: descuentoAmt,
+        p_metodo:    metodoFinal,
+        p_items: cart.map((item) => ({
+          product_id:      item.product.id,
+          nombre:          item.product.nombre,
+          cantidad:        item.cantidad,
+          unidad:          item.product.unidad,
+          precio_unitario: item.precio_unitario,
+          subtotal:        item.subtotal,
+        })),
+        p_pagos: activePagosRpc,
+      })
+
+      if (rpcError) throw new Error(`No se pudo registrar la venta: ${rpcError.message}`)
+
+      const venta = { id: ventaId as string }
+
+      // Show ticket (step 2) instead of closing immediately
       setCompletedSale({
         ventaId:       venta.id,
         items:         cart,
         total:         finalTotal,
         descuento:     descuentoAmt,
         metodo:        metodoFinal,
-        pagos:         activePagos,
+        pagos:         activePagosRpc,
         sucursalNombre: profile?.sucursal?.nombre ?? '',
         cajeroNombre:   profile?.nombre ?? '',
         fecha:          new Date(),
