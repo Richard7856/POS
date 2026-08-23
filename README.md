@@ -54,6 +54,34 @@ supabase functions deploy create-user
 supabase functions deploy reset-password
 ```
 
+### Una tienda hoy, varias mañana
+
+El sistema opera hoy con una sucursal, pero el modelo ya es multi-tienda:
+
+| Qué | Alcance |
+|---|---|
+| Catálogo (`products`) | **Global** — misma lista, mismo EAN y mismo precio en todas las tiendas. `sucursal_id` en products está reservado y hoy nada lo usa. |
+| Inventario (`lotes`, `mermas`, `ajustes`) | **Por sucursal** — cada tienda registra sus entradas y su merma. |
+| Caja (`ventas`, `cortes`, `movimientos_caja`) | **Por sucursal** — una caja por tienda; el corte es único por sucursal + fecha. |
+| Personas (`profiles`) | Cada perfil pertenece a una sucursal; admin ve todas. |
+
+Las vistas operativas (POS, stock en catálogo, pedido, badge de alertas,
+inventario) muestran **la sucursal del perfil** — también para el admin, si
+tiene una asignada. El dashboard del admin es global con comparativa por
+sucursal: esa es la vista de dueño.
+
+**Checklist para abrir la sucursal 2** (cuando llegue el día):
+
+1. Admin → Sucursales → crear la nueva.
+2. Admin → Usuarios → dar de alta (o reasignar) los perfiles de esa tienda.
+3. Registrar sus primeras entradas de mercancía — su inventario arranca en cero,
+   no hereda nada de la tienda 1.
+4. Listo: corte, pedido, merma y ganancia salen separados por tienda solos.
+
+Lo que NO existe todavía (trabajo futuro, decidir cuando haga falta):
+precio distinto por sucursal (tabla de overrides), traspasos de mercancía
+entre tiendas, y consolidado de pedido multi-tienda.
+
 ### Roles
 
 Tres roles, con el alcance limitado a la sucursal del perfil salvo `admin`:

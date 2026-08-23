@@ -80,10 +80,14 @@ export default function ProductosPage() {
         .order('categoria', { ascending: true })
         .order('nombre', { ascending: true }),
       // Sin filtro de > 0: un lote en negativo significa que se vendió más de
-      // lo que entró, y eso tiene que verse en el catálogo.
-      supabase
-        .from('lotes')
-        .select('product_id, cantidad_disponible'),
+      // lo que entró, y eso tiene que verse en el catálogo. El stock mostrado
+      // es el de LA SUCURSAL del perfil — con dos tiendas, sumar todas aquí
+      // mentiría; sin sucursal asignada (admin global) se muestra el total.
+      (() => {
+        let q = supabase.from('lotes').select('product_id, cantidad_disponible')
+        if (profile?.sucursal_id) q = q.eq('sucursal_id', profile.sucursal_id)
+        return q
+      })(),
     ])
 
     if (data) {
@@ -175,7 +179,7 @@ export default function ProductosPage() {
         const newProduct: Product = {
           id: newId,
           activo: true,
-          sucursal_id: profile?.sucursal_id ?? null,
+          sucursal_id: null,   // catálogo global: el producto existe en todas las sucursales
           created_at: now,
           ...(payload as Omit<Product, 'id' | 'activo' | 'sucursal_id' | 'created_at'>),
         }

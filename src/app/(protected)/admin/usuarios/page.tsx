@@ -150,7 +150,16 @@ export default function UsuariosPage() {
         <h1 className="text-xl font-bold text-gray-800">👥 Usuarios</h1>
         <div className="flex-1" />
         <button
-          onClick={() => { setForm(EMPTY_FORM); setSaveError(null); setShowForm(true) }}
+          onClick={() => {
+            // Con una sola sucursal no hay nada que elegir: se preselecciona,
+            // y el usuario nuevo no cae en "sin sucursal asignada" por olvido.
+            setForm({
+              ...EMPTY_FORM,
+              sucursal_id: sucursales.length === 1 ? sucursales[0].id : '',
+            })
+            setSaveError(null)
+            setShowForm(true)
+          }}
           className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700"
         >
           + Nuevo usuario

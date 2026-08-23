@@ -80,7 +80,9 @@ export default function PedidoPage() {
       .select('product_id, cantidad_disponible')
       .in('product_id', productIds)
 
-    if (!isAdmin && profile.sucursal_id) {
+    // El pedido es "qué comprar hoy para ESTA tienda": quien tenga sucursal
+    // asignada (admin incluido) ve la suya. Admin sin sucursal ve el global.
+    if (profile.sucursal_id) {
       lotesQuery = lotesQuery.eq('sucursal_id', profile.sucursal_id)
     }
 
@@ -140,7 +142,7 @@ export default function PedidoPage() {
     const fecha = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })
     const lineas = [
       `📦 PEDIDO — ${fecha}`,
-      isAdmin ? '(todas las sucursales)' : `Sucursal: ${profile?.sucursal?.nombre ?? ''}`,
+      profile?.sucursal_id ? `Sucursal: ${profile.sucursal?.nombre ?? ''}` : '(todas las sucursales)',
       '',
       ...items.map((item) => {
         const emoji = item.urgencia === 'agotado' ? '🔴' : item.urgencia === 'critico' ? '🟠' : '🟡'
@@ -181,9 +183,9 @@ export default function PedidoPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-800">🛒 Lista de pedido</h1>
           <p className="text-xs text-gray-400 mt-0.5">
-            {isAdmin
-              ? 'Productos bajo mínimo — todas las sucursales'
-              : `Sucursal: ${profile.sucursal?.nombre ?? '—'}`}
+            {profile.sucursal_id
+              ? `Sucursal: ${profile.sucursal?.nombre ?? '—'}`
+              : 'Productos bajo mínimo — todas las sucursales'}
           </p>
         </div>
         <div className="flex gap-2">

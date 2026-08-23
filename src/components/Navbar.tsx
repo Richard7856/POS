@@ -74,7 +74,9 @@ export default function Navbar() {
         .select('product_id, cantidad_disponible')
         .in('product_id', prods.map((p) => p.id))
 
-      if (profile?.rol !== 'admin' && profile?.sucursal_id) {
+      // El badge es operativo (qué falta AQUÍ): quien tenga sucursal asignada
+      // ve la suya, admin también. Sin sucursal (admin global) ve el total.
+      if (profile?.sucursal_id) {
         q = q.eq('sucursal_id', profile.sucursal_id)
       }
 
