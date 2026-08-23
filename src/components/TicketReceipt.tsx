@@ -40,7 +40,7 @@ function fmtDate(date: Date) {
 function buildShareText(sale: CompletedSale): string {
   const lines: string[] = [
     sale.sucursalNombre || 'Recaudería',
-    `${fmtDate(sale.fecha)}  ${fmtTime(sale.fecha)}  Folio: ${folio(sale.ventaId)}`,
+    `${fmtDate(sale.fecha)}  ${fmtTime(sale.fecha)}  Folio: ${sale.pendienteSync ? 'POR ASIGNAR' : folio(sale.ventaId)}`,
     '─'.repeat(32),
     ...sale.items.map(
       (i) => `${i.product.nombre.padEnd(18).slice(0, 18)} ${String(i.cantidad).padStart(6)} ${i.product.unidad.padEnd(4)}  $${i.subtotal.toFixed(2)}`
@@ -65,7 +65,7 @@ export default function TicketReceipt({ sale, onClose }: Props) {
     const text = buildShareText(sale)
     if (navigator.share) {
       try {
-        await navigator.share({ title: `Ticket ${folio(sale.ventaId)}`, text })
+        await navigator.share({ title: `Ticket ${sale.pendienteSync ? 'pendiente' : folio(sale.ventaId)}`, text })
       } catch {
         // User dismissed share sheet — that's fine
       }
@@ -101,8 +101,15 @@ export default function TicketReceipt({ sale, onClose }: Props) {
             {fmtDate(sale.fecha)} {fmtTime(sale.fecha)}
           </p>
           <p className="text-center text-gray-500 mb-2">
-            Folio: #{folio(sale.ventaId)}
+            Folio: {sale.pendienteSync ? 'por asignar' : `#${folio(sale.ventaId)}`}
           </p>
+
+          {/* Cobrada sin señal: quedó en cola y se registra al reconectar */}
+          {sale.pendienteSync && (
+            <p className="text-center text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2 print:hidden">
+              📵 Venta cobrada sin conexión — se registrará al volver la señal
+            </p>
+          )}
 
           <p className="border-t border-dashed border-gray-300 my-2" />
 

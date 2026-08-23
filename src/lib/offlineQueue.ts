@@ -12,9 +12,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface QueuedOp {
   id: string                        // client-generated UUID for the queue entry
-  table: string
-  action: 'insert' | 'update' | 'upsert_toggle'
-  payload: Record<string, unknown>  // columns to write
+  table: string                     // para action 'rpc' es el nombre de la función
+  action: 'insert' | 'update' | 'upsert_toggle' | 'rpc'
+  payload: Record<string, unknown>  // columns to write, o args del RPC
   filter?: { key: string; val: unknown }[]  // WHERE clauses (for update)
   ts: number                        // unix ms — used for ordering and debugging
 }
@@ -63,6 +63,13 @@ export async function syncQueue(
     try {
       if (op.action === 'insert') {
         const { error } = await supabase.from(op.table).insert(op.payload)
+        if (error) throw error
+
+      } else if (op.action === 'rpc') {
+        // Venta cobrada sin señal: se registra ahora, con el RPC atómico. El
+        // FIFO y el costo se calculan con el inventario de ESTE momento — que
+        // es el real, porque la mercancía ya salió del mostrador.
+        const { error } = await supabase.rpc(op.table, op.payload)
         if (error) throw error
 
       } else if (op.action === 'update' && op.filter) {

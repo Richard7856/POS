@@ -25,6 +25,7 @@ import { useAuth } from '@/context/AuthContext'
 import { CartItem } from '@/lib/types'
 // El FIFO, el costo y las escrituras viven en el RPC registrar_venta
 // (una sola transacción en Postgres); aquí sólo se arma el payload.
+import { enqueue } from '@/lib/offlineQueue'
 import TicketReceipt from '@/components/TicketReceipt'
 
 type MetodoPago = 'efectivo' | 'tarjeta' | 'transferencia'
@@ -58,6 +59,8 @@ export interface CompletedSale {
   sucursalNombre: string
   cajeroNombre: string
   fecha: Date
+  /** true si se cobró sin señal: quedó en cola y se registra al reconectar */
+  pendienteSync?: boolean
 }
 
 export default function CheckoutModal({
@@ -117,10 +120,7 @@ export default function CheckoutModal({
             .map((m) => ({ metodo: m.value, monto: parseFloat(pagosAmounts[m.value]) }))
         : []
 
-      // Todo el cobro en UNA transacción del servidor: venta + pagos + items +
-      // descuento FIFO con lock. O entra completa o no entra nada — y dos
-      // cajas cobrando lo mismo se forman en fila en vez de pisarse.
-      const { data: ventaId, error: rpcError } = await supabase.rpc('registrar_venta', {
+      const rpcArgs = {
         p_total:     finalTotal,
         p_descuento: descuentoAmt,
         p_metodo:    metodoFinal,
@@ -133,11 +133,28 @@ export default function CheckoutModal({
           subtotal:        item.subtotal,
         })),
         p_pagos: activePagosRpc,
-      })
+      }
 
-      if (rpcError) throw new Error(`No se pudo registrar la venta: ${rpcError.message}`)
+      let venta: { id: string }
+      let pendienteSync = false
 
-      const venta = { id: ventaId as string }
+      if (navigator.onLine) {
+        // Todo el cobro en UNA transacción del servidor: venta + pagos + items
+        // + descuento FIFO con lock. O entra completa o no entra nada — y dos
+        // cajas cobrando lo mismo se forman en fila en vez de pisarse.
+        const { data: ventaId, error: rpcError } = await supabase.rpc('registrar_venta', rpcArgs)
+        if (rpcError) throw new Error(`No se pudo registrar la venta: ${rpcError.message}`)
+        venta = { id: ventaId as string }
+      } else {
+        // Sin señal: el dinero ya está en la mano y el cliente no puede esperar
+        // al módem. La venta se encola y SyncProvider la registra al reconectar
+        // con el mismo RPC (el FIFO se calcula entonces, con el inventario
+        // real de ese momento). El ticket sale igual, marcado como pendiente.
+        enqueue({ table: 'registrar_venta', action: 'rpc', payload: rpcArgs })
+        ;(window as Window & { __posRefreshPending?: () => void }).__posRefreshPending?.()
+        venta = { id: crypto.randomUUID() }   // folio provisional del ticket
+        pendienteSync = true
+      }
 
       // Show ticket (step 2) instead of closing immediately
       setCompletedSale({
@@ -150,6 +167,7 @@ export default function CheckoutModal({
         sucursalNombre: profile?.sucursal?.nombre ?? '',
         cajeroNombre:   profile?.nombre ?? '',
         fecha:          new Date(),
+        pendienteSync,
       })
       setStep('ticket')
       // La venta ya está en la base: liberar la cuenta de inmediato para que

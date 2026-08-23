@@ -207,13 +207,17 @@ en negativo (antes esos kilos simplemente desaparecían y el lote se quedaba en
 
 ## Modo offline
 
-`productCache` guarda el catálogo y `offlineQueue` encola escrituras de
-productos hasta que vuelve la conexión. **El cobro todavía no pasa por la cola**:
-sin internet no se puede cerrar una venta.
+`productCache` guarda el catálogo y `offlineQueue` encola escrituras hasta que
+vuelve la conexión — **incluido el cobro**: sin señal la venta se encola, el
+ticket sale igual (folio "por asignar" y aviso de pendiente) y al reconectar
+SyncProvider la registra con el RPC atómico. El FIFO y el costo se calculan al
+sincronizar, con el inventario real de ese momento — que es el correcto, porque
+la mercancía ya salió del mostrador.
 
 ## Pendientes conocidos
 
-1. El cobro no funciona offline (ver arriba).
-2. La merma aún descuenta el lote con lectura+escritura desde el navegador
+1. La merma aún descuenta el lote con lectura+escritura desde el navegador
    (mismo patrón que tenía el cobro); moverla a un RPC como registrar_venta.
-3. Sin CI (las pruebas de lógica corren a mano).
+2. Sin CI (las pruebas de lógica corren a mano).
+3. Ventas offline: si dos dispositivos venden el mismo producto sin señal, el
+   aviso de stock de cada uno no ve lo del otro hasta sincronizar.
