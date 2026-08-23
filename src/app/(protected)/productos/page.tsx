@@ -262,12 +262,20 @@ export default function ProductosPage() {
           )}
         </div>
         {canEdit && (
-          <button
-            onClick={() => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true) }}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
-          >
-            + Nuevo producto
-          </button>
+          <div className="flex gap-2">
+            <Link
+              href="/productos/precios"
+              className="border border-green-600 text-green-700 hover:bg-green-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              💲 Precios de hoy
+            </Link>
+            <button
+              onClick={() => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true) }}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+            >
+              + Nuevo producto
+            </button>
+          </div>
         )}
       </div>
 
